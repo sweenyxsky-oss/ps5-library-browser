@@ -129,7 +129,9 @@ def validate_package(archive_path):
             # 2. Required files check
             required_files = [
                 "ps5-library-browser.elf",
+                "eboot.bin",
                 "sce_sys/param.json",
+                "sce_sys/icon0.png",
                 "README.md",
                 "LICENSE"
             ]
@@ -145,6 +147,20 @@ def validate_package(archive_path):
                 all_passed = False
             else:
                 log_check("Required Files Present", True, ", ".join(required_files))
+
+            # 2b. Check sce_sys/icon0.png
+            icon_path = next((f for f in file_list if f == "sce_sys/icon0.png" or f.endswith("icon0.png")), None)
+            if icon_path:
+                icon_bytes = zf.read(icon_path)
+                is_png = len(icon_bytes) >= 8 and icon_bytes[:8] == b"\x89PNG\r\n\x1a\n"
+                if is_png:
+                    log_check("PS5 Home Screen Icon (sce_sys/icon0.png)", True, f"Valid PNG icon ({len(icon_bytes):,} bytes)")
+                else:
+                    log_check("PS5 Home Screen Icon (sce_sys/icon0.png)", False, "File is not a valid PNG header")
+                    all_passed = False
+            else:
+                log_check("PS5 Home Screen Icon (sce_sys/icon0.png)", False, "sce_sys/icon0.png missing (required by ShadowMountPlus & PS5 UI)")
+                all_passed = False
 
             # 3. Check sce_sys/param.json
             param_path = next((f for f in file_list if f == "sce_sys/param.json" or f.endswith("param.json")), None)

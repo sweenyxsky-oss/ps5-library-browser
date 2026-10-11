@@ -84,7 +84,9 @@ jobs:
 
           mkdir -p release_staging/sce_sys
           cp build-ps5/ps5-library-browser.elf release_staging/
+          cp build-ps5/ps5-library-browser.elf release_staging/eboot.bin
           cp sce_sys/param.json release_staging/sce_sys/
+          cp sce_sys/icon0.png release_staging/sce_sys/
           cp README.md LICENSE release_staging/
 
           cd release_staging
