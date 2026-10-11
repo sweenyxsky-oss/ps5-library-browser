@@ -242,7 +242,6 @@ void test_ui_shell_integration_with_inspector() {
     // Press Cross on focused game -> opens Inspector
     InputManager input;
     input.feed_raw_buttons(pad_bits::kCross);
-    input.process_pad_input(input.current_state());
     bool handled = shell.handle_pad_input(input);
     assert(handled);
     (void)handled;
@@ -261,7 +260,6 @@ void test_ui_shell_integration_with_inspector() {
 
     // Press Circle in inspector -> closes Inspector and returns to library
     input.feed_raw_buttons(pad_bits::kCircle);
-    input.process_pad_input(input.current_state());
     handled = shell.handle_pad_input(input);
     assert(handled);
     assert(!shell.is_inspector_open());

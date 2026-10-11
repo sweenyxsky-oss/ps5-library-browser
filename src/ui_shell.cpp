@@ -6,15 +6,44 @@
 namespace ps5_library {
 
 UiShell::UiShell(std::shared_ptr<DaemonLock> daemon_client,
-                 std::string cache_path)
+                 std::string cache_path,
+                 std::string install_state_path)
     : cache_(std::move(cache_path)),
       daemon_client_(daemon_client ? daemon_client : std::make_shared<DaemonLock>()),
-      installer_(std::make_shared<InstallPipeline>()) {
+      installer_(std::make_shared<InstallPipeline>(nullptr, std::move(install_state_path))) {
     // Attempt fast index load on startup
     std::vector<GameEntry> cached_entries;
     if (cache_.load(cached_entries)) {
         set_entries(std::move(cached_entries));
     }
+    setup_pipeline_callbacks();
+}
+
+void UiShell::set_installer(std::shared_ptr<InstallPipeline> installer) {
+    installer_ = std::move(installer);
+    setup_pipeline_callbacks();
+}
+
+void UiShell::setup_pipeline_callbacks() {
+    if (!installer_) return;
+
+    installer_->set_task_finished_callback([this](const InstallTask& task) {
+        if (task.status == InstallStatus::Completed) {
+            refresh_after_install(task.title_id, task.source_path);
+        } else if (task.status == InstallStatus::Failed || task.status == InstallStatus::Interrupted) {
+            // Keep inspector in sync if open
+            if (inspector_) {
+                inspector_->sync_with_pipeline(*installer_);
+            }
+        }
+    });
+
+    installer_->set_batch_finished_callback([this](const BatchProgress& batch) {
+        (void)batch;
+        if (inspector_) {
+            inspector_->sync_with_pipeline(*installer_);
+        }
+    });
 }
 
 bool UiShell::is_shadowmount_available() const {
@@ -115,13 +144,67 @@ void UiShell::show_shadowmount_lock() {
     dialog_model_.secondary_text = "Ensure the ShadowMountPlus daemon is running on port 10101 to enable remote library browsing.";
     dialog_model_.options = {"Retry Connection", "Return to Installed Games"};
     dialog_model_.selected_option = 0;
+    dialog_model_.extra_payload.clear();
+}
+
+void UiShell::show_recovery_guidance(const std::string& title,
+                                     const std::string& message,
+                                     const std::string& steps) {
+    dialog_model_.type = DialogType::RecoveryGuidance;
+    dialog_model_.title = title.empty() ? "Installation Troubleshooting" : title;
+    dialog_model_.message = message;
+    dialog_model_.secondary_text = steps;
+    dialog_model_.options = {"Dismiss", "Retry Install"};
+    dialog_model_.selected_option = 0;
+    dialog_model_.extra_payload = steps;
 }
 
 void UiShell::dismiss_dialog() {
     dialog_model_.type = DialogType::None;
     dialog_model_.title.clear();
     dialog_model_.message.clear();
+    dialog_model_.secondary_text.clear();
     dialog_model_.options.clear();
+    dialog_model_.selected_option = 0;
+    dialog_model_.extra_payload.clear();
+}
+
+bool UiShell::is_title_installed(const std::string& title_id) const {
+    if (title_id.empty()) return false;
+    for (const auto& entry : all_entries_) {
+        if (entry.title_id == title_id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void UiShell::refresh_after_install(const std::string& title_id, const std::string& installed_path) {
+    (void)installed_path;
+    // 1. Refresh entry inside all_entries_ if present
+    for (auto& entry : all_entries_) {
+        if (entry.title_id == title_id) {
+            entry.confidence = MetadataConfidence::Verified;
+            entry.calculate_totals();
+
+            // 2. If inspector is currently viewing this title, update its model
+            if (inspector_ && inspector_->title_id() == title_id) {
+                inspector_->update_entry(entry);
+                if (installer_) {
+                    inspector_->sync_with_pipeline(*installer_);
+                }
+            }
+            break;
+        }
+    }
+
+    // 3. Persist updated cache
+    cache_.save_atomic(all_entries_, current_scan_path_);
+    update_filtered_entries();
+
+    if (inspector_ && installer_) {
+        inspector_->sync_with_pipeline(*installer_);
+    }
 }
 
 void UiShell::update_filtered_entries() {
@@ -176,6 +259,11 @@ bool UiShell::handle_pad_input(const InputManager& input) {
                 library_mode_ = LibraryMode::InstalledGames;
                 return true;
             }
+        } else if (dialog_model_.type == DialogType::RecoveryGuidance) {
+            if (input.action_triggered(LogicalAction::Confirm) || input.action_triggered(LogicalAction::Cancel)) {
+                dismiss_dialog();
+                return true;
+            }
         } else {
             if (input.action_triggered(LogicalAction::Cancel)) {
                 dismiss_dialog();
@@ -191,6 +279,19 @@ bool UiShell::handle_pad_input(const InputManager& input) {
             close_inspector();
             return true;
         }
+
+        // Check if user pressed Inspect (Square) on a failed package to view recovery steps
+        if (input.action_triggered(LogicalAction::Inspect)) {
+            const auto item = inspector_->selected_item();
+            if (item.has_value() && (item->install_status == InstallStatus::Failed ||
+                                     item->install_status == InstallStatus::Interrupted)) {
+                show_recovery_guidance("Troubleshooting: " + item->filename,
+                                       item->error_message,
+                                       item->recovery_guidance);
+                return true;
+            }
+        }
+
         bool handled = inspector_->handle_pad_input(input, *installer_);
         inspector_->sync_with_pipeline(*installer_);
         return handled;
@@ -292,7 +393,14 @@ std::vector<CardVisual> UiShell::get_current_view_cards() const {
 
 std::vector<ButtonPrompt> UiShell::get_contextual_prompts() const {
     if (is_inspector_open()) {
-        return inspector_->get_contextual_prompts();
+        auto prompts = inspector_->get_contextual_prompts();
+        // If selected item is failed, add prompt for Recovery Guidance
+        const auto item = inspector_->selected_item();
+        if (item.has_value() && (item->install_status == InstallStatus::Failed ||
+                                 item->install_status == InstallStatus::Interrupted)) {
+            prompts.push_back({ButtonGlyph::Square, "Troubleshoot / Recovery", true, false});
+        }
+        return prompts;
     }
 
     std::vector<ButtonPrompt> prompts;
@@ -300,6 +408,11 @@ std::vector<ButtonPrompt> UiShell::get_contextual_prompts() const {
     if (dialog_model_.type == DialogType::ShadowMountLock) {
         prompts.push_back({ButtonGlyph::Cross, "Retry Connection", true, true});
         prompts.push_back({ButtonGlyph::Circle, "Installed Games", true, false});
+        return prompts;
+    }
+
+    if (dialog_model_.type == DialogType::RecoveryGuidance) {
+        prompts.push_back({ButtonGlyph::Cross, "Dismiss Guidance", true, true});
         return prompts;
     }
 

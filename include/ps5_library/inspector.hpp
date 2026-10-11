@@ -40,8 +40,11 @@ struct FormattedPackageDetail {
     ItemKind kind{ItemKind::Unknown};
 
     InstallStatus install_status{InstallStatus::Queued};
+    InstallErrorCode error_code{InstallErrorCode::None};
     int progress_percent{0};
-    std::string status_badge;      // "READY", "QUEUED", "INSTALLING (42%)", "INSTALLED", "FAILED"
+    std::string status_badge;      // "READY", "QUEUED", "INSTALLING (42%)", "INSTALLED", "FAILED", "INTERRUPTED"
+    std::string error_message;
+    std::string recovery_guidance; // Actionable steps to resolve failures or retry
 
     /**
      * Formats one-line highlighted package summary:
@@ -50,7 +53,7 @@ struct FormattedPackageDetail {
     std::string formatted_summary_line() const;
 
     /**
-     * Formats multi-line detail box
+     * Formats multi-line detail box with failure recovery steps
      */
     std::string formatted_detail_box() const;
 };
@@ -74,6 +77,7 @@ public:
     bool has_base_game() const { return entry_.base_game.has_value(); }
 
     const GameEntry& entry() const { return entry_; }
+    void update_entry(GameEntry new_entry);
 
     // Tab control
     InspectorTab active_tab() const { return active_tab_; }

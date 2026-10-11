@@ -22,7 +22,8 @@ enum class DialogType {
     ShadowMountLock,
     FolderPicker,
     SearchFilter,
-    Notification
+    Notification,
+    RecoveryGuidance
 };
 
 struct DialogModel {
@@ -32,12 +33,14 @@ struct DialogModel {
     std::string secondary_text;
     std::vector<std::string> options;
     int selected_option{0};
+    std::string extra_payload;
 };
 
 class UiShell {
 public:
     UiShell(std::shared_ptr<DaemonLock> daemon_client = nullptr,
-            std::string cache_path = "/tmp/ps5_library_cache.json");
+            std::string cache_path = "/tmp/ps5_library_cache.json",
+            std::string install_state_path = "");
 
     // Mode and Layout getters/setters
     LibraryMode library_mode() const { return library_mode_; }
@@ -78,12 +81,13 @@ public:
 
     // Installer pipeline access
     std::shared_ptr<InstallPipeline> installer() const { return installer_; }
-    void set_installer(std::shared_ptr<InstallPipeline> installer) { installer_ = std::move(installer); }
+    void set_installer(std::shared_ptr<InstallPipeline> installer);
 
     // Dialog state
     DialogType active_dialog() const { return dialog_model_.type; }
     const DialogModel& dialog_model() const { return dialog_model_; }
     void show_shadowmount_lock();
+    void show_recovery_guidance(const std::string& title, const std::string& message, const std::string& steps);
     void dismiss_dialog();
 
     // Input processing
@@ -104,6 +108,12 @@ public:
     // View layout engine access
     ViewLayoutEngine& layout_engine() { return layout_engine_; }
     const ViewLayoutEngine& layout_engine() const { return layout_engine_; }
+
+    // Post-install refresh: updates index cache and any open inspector instance
+    void refresh_after_install(const std::string& title_id, const std::string& installed_path);
+
+    // Check if an entry is installed locally
+    bool is_title_installed(const std::string& title_id) const;
 
 private:
     LibraryMode library_mode_{LibraryMode::InstalledGames};
@@ -127,7 +137,7 @@ private:
     std::shared_ptr<InstallPipeline> installer_;
 
     void update_filtered_entries();
-    void enforce_daemon_gate_if_needed();
+    void setup_pipeline_callbacks();
 };
 
 } // namespace ps5_library

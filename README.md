@@ -67,7 +67,8 @@ ps5-library-browser/
 │   ├── daemon_client_test.cpp       # Milestone 1 tests
 │   ├── scanner_cache_test.cpp       # Milestone 2 tests
 │   ├── ui_shell_test.cpp            # Milestone 3 tests
-│   └── inspector_installer_test.cpp # Milestone 4 tests
+│   ├── inspector_installer_test.cpp # Milestone 4 tests
+│   └── ps5_installer_persistence_test.cpp # PS5 install delegate, persistence & recovery tests
 └── README.md
 ```
 
@@ -118,6 +119,10 @@ ctest --test-dir build --output-on-failure
   - Formatted package metadata with highlighted file extensions (`[.PKG]`, `[.EXFAT]`, `[.FFPKG]`) and human-readable sizes
   - Per-item install triggers for games, DLCs, and updates
   - "Install All DLCs" pipeline with progress callbacks, cancellation, and granular failure recovery
+  - **PS5 Package Install Delegate & Capability Model**: Safe runtime probe checking kernel privileges and system service availability (`libSceAppInstUtil`); returns descriptive `UnsupportedPlatform` diagnostics and guidance on non-PS5 hosts
+  - **Persistent Install Jobs Across Restarts**: Atomic JSON state tracking (`/tmp/ps5_library_install_jobs.json`) persisting queued/completed jobs; automatically restores `InProgress` tasks as `Interrupted` on restart
+  - **Post-Install Library & Inspector Refresh**: Real-time promotion of item confidence and inspector state upon package installation completion
+  - **Actionable Recovery Guidance**: Granular troubleshooting steps for every error code (unsupported platform, missing privileges, missing system services, out of storage, corrupted header, interrupted install)
 - [ ] **Milestone 5: PS5 Payload Packaging & Hardware Integration**
 
 ---

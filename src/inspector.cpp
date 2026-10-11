@@ -31,13 +31,38 @@ std::string FormattedPackageDetail::formatted_detail_box() const {
         << "File: " << filename << '\n'
         << "Format: " << highlighted_format << "  " << extension << '\n'
         << "Size: " << (formatted_size.empty() ? "Unknown" : formatted_size);
-    if (!version.empty()) out << '\n' << "Version: " << version;
-    if (!absolute_path.empty()) out << '\n' << "Path: " << absolute_path;
+    if (!version.empty()) {
+        out << '\n' << "Version: " << version;
+    }
+    if (!absolute_path.empty()) {
+        out << '\n' << "Path: " << absolute_path;
+    }
     out << '\n' << "Status: " << (status_badge.empty() ? "READY" : status_badge);
+
+    if (!error_message.empty()) {
+        out << '\n' << "Error: " << error_message;
+    }
+    if (!recovery_guidance.empty()) {
+        out << '\n' << "Recovery Guidance:\n" << recovery_guidance;
+    }
+
     return out.str();
 }
 
 GameInspector::GameInspector(GameEntry entry) : entry_(std::move(entry)) {
+    outside_base_size_ = entry_.base_game && entry_.base_game->size_known
+        ? (entry_.base_game->formatted_size.empty()
+            ? format_file_size(entry_.base_game->size_bytes)
+            : entry_.base_game->formatted_size)
+        : "Unknown";
+    if (entry_.formatted_total_size.empty()) {
+        entry_.calculate_totals();
+    }
+    rebuild_tab_items();
+}
+
+void GameInspector::update_entry(GameEntry new_entry) {
+    entry_ = std::move(new_entry);
     outside_base_size_ = entry_.base_game && entry_.base_game->size_known
         ? (entry_.base_game->formatted_size.empty()
             ? format_file_size(entry_.base_game->size_bytes)
@@ -76,13 +101,21 @@ void GameInspector::prev_tab() {
 void GameInspector::rebuild_tab_items() {
     current_tab_items_.clear();
     if (active_tab_ == InspectorTab::Game) {
-        if (entry_.base_game) current_tab_items_.push_back(make_package_detail(*entry_.base_game));
+        if (entry_.base_game) {
+            current_tab_items_.push_back(make_package_detail(*entry_.base_game));
+        }
     } else if (active_tab_ == InspectorTab::Dlc) {
-        for (const auto& item : entry_.dlcs) current_tab_items_.push_back(make_package_detail(item));
+        for (const auto& item : entry_.dlcs) {
+            current_tab_items_.push_back(make_package_detail(item));
+        }
     } else {
-        for (const auto& item : entry_.updates) current_tab_items_.push_back(make_package_detail(item));
+        for (const auto& item : entry_.updates) {
+            current_tab_items_.push_back(make_package_detail(item));
+        }
     }
-    if (selected_item_index_ >= current_tab_items_.size()) selected_item_index_ = current_tab_items_.empty() ? 0 : current_tab_items_.size() - 1;
+    if (selected_item_index_ >= current_tab_items_.size()) {
+        selected_item_index_ = current_tab_items_.empty() ? 0 : current_tab_items_.size() - 1;
+    }
 }
 
 FormattedPackageDetail GameInspector::make_package_detail(const GameItem& item) {
@@ -93,10 +126,16 @@ FormattedPackageDetail GameInspector::make_package_detail(const GameItem& item) 
         : "Unknown";
     detail.raw_size_bytes = item.size_bytes;
     detail.extension = std::filesystem::path(item.filename).extension().string();
-    if (detail.extension.empty() && !item.format.empty()) detail.extension = "." + item.format;
+    if (detail.extension.empty() && !item.format.empty()) {
+        detail.extension = "." + item.format;
+    }
     std::string upper = item.format.empty() ? detail.extension : item.format;
-    std::transform(upper.begin(), upper.end(), upper.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
-    if (!upper.empty() && upper.front() == '.') upper.erase(0, 1);
+    std::transform(upper.begin(), upper.end(), upper.begin(), [](unsigned char c) {
+        return static_cast<char>(std::toupper(c));
+    });
+    if (!upper.empty() && upper.front() == '.') {
+        upper.erase(0, 1);
+    }
     detail.highlighted_format = "[" + (upper.empty() ? "UNKNOWN" : upper) + "]";
     detail.display_name = item.display_name;
     detail.version = item.version;
@@ -107,15 +146,21 @@ FormattedPackageDetail GameInspector::make_package_detail(const GameItem& item) 
 }
 
 void GameInspector::select_next_item() {
-    if (!current_tab_items_.empty()) selected_item_index_ = (selected_item_index_ + 1) % current_tab_items_.size();
+    if (!current_tab_items_.empty()) {
+        selected_item_index_ = (selected_item_index_ + 1) % current_tab_items_.size();
+    }
 }
 
 void GameInspector::select_prev_item() {
-    if (!current_tab_items_.empty()) selected_item_index_ = (selected_item_index_ + current_tab_items_.size() - 1) % current_tab_items_.size();
+    if (!current_tab_items_.empty()) {
+        selected_item_index_ = (selected_item_index_ + current_tab_items_.size() - 1) % current_tab_items_.size();
+    }
 }
 
 std::optional<FormattedPackageDetail> GameInspector::selected_item() const {
-    if (selected_item_index_ >= current_tab_items_.size()) return std::nullopt;
+    if (selected_item_index_ >= current_tab_items_.size()) {
+        return std::nullopt;
+    }
     return current_tab_items_[selected_item_index_];
 }
 
@@ -138,27 +183,54 @@ void GameInspector::select_prev_action() {
 }
 
 bool GameInspector::handle_pad_input(const InputManager& input, InstallPipeline& pipeline) {
-    if (input.action_triggered(LogicalAction::Cancel)) return false;
+    if (input.action_triggered(LogicalAction::Cancel)) {
+        return false;
+    }
+
     if (input.action_triggered(LogicalAction::NavLeft)) {
-        if (focus_section_ == InspectorFocusSection::Tabs) prev_tab();
-        else if (focus_section_ == InspectorFocusSection::Actions) select_prev_action();
+        if (focus_section_ == InspectorFocusSection::Tabs) {
+            prev_tab();
+        } else if (focus_section_ == InspectorFocusSection::Actions) {
+            select_prev_action();
+        }
         return true;
     }
+
     if (input.action_triggered(LogicalAction::NavRight)) {
-        if (focus_section_ == InspectorFocusSection::Tabs) next_tab();
-        else if (focus_section_ == InspectorFocusSection::Actions) select_next_action();
+        if (focus_section_ == InspectorFocusSection::Tabs) {
+            next_tab();
+        } else if (focus_section_ == InspectorFocusSection::Actions) {
+            select_next_action();
+        }
         return true;
     }
+
     if (input.action_triggered(LogicalAction::NavUp)) {
-        if (focus_section_ == InspectorFocusSection::ItemList) focus_section_ = InspectorFocusSection::Tabs;
-        else if (focus_section_ == InspectorFocusSection::Actions) focus_section_ = InspectorFocusSection::ItemList;
+        if (focus_section_ == InspectorFocusSection::ItemList) {
+            if (selected_item_index_ > 0) {
+                selected_item_index_--;
+            } else {
+                focus_section_ = InspectorFocusSection::Tabs;
+            }
+        } else if (focus_section_ == InspectorFocusSection::Actions) {
+            focus_section_ = InspectorFocusSection::ItemList;
+        }
         return true;
     }
+
     if (input.action_triggered(LogicalAction::NavDown)) {
-        if (focus_section_ == InspectorFocusSection::Tabs) focus_section_ = InspectorFocusSection::ItemList;
-        else if (focus_section_ == InspectorFocusSection::ItemList) focus_section_ = InspectorFocusSection::Actions;
+        if (focus_section_ == InspectorFocusSection::Tabs) {
+            focus_section_ = InspectorFocusSection::ItemList;
+        } else if (focus_section_ == InspectorFocusSection::ItemList) {
+            if (selected_item_index_ + 1 < current_tab_items_.size()) {
+                selected_item_index_++;
+            } else {
+                focus_section_ = InspectorFocusSection::Actions;
+            }
+        }
         return true;
     }
+
     if (input.action_triggered(LogicalAction::Confirm)) {
         if (focus_section_ == InspectorFocusSection::Actions) {
             if (active_tab_ == InspectorTab::Dlc && can_install_all_dlcs() && selected_action_button_ == 1) {
@@ -176,47 +248,74 @@ bool GameInspector::handle_pad_input(const InputManager& input, InstallPipeline&
                 item.display_name = selected->display_name;
                 pipeline.queue_item(item, entry_.title_id);
             }
+        } else if (focus_section_ == InspectorFocusSection::ItemList) {
+            // Selecting an item in item list focuses action button
+            focus_section_ = InspectorFocusSection::Actions;
         }
         return true;
     }
+
     if (input.action_triggered(LogicalAction::Inspect) && focus_section_ == InspectorFocusSection::ItemList) {
         if (active_tab_ == InspectorTab::Game) set_tab(InspectorTab::Dlc);
         else if (active_tab_ == InspectorTab::Dlc) set_tab(InspectorTab::Update);
         else set_tab(InspectorTab::Game);
         return true;
     }
+
     if (input.action_triggered(LogicalAction::ToggleMode)) {
-        if (active_tab_ == InspectorTab::Dlc && can_install_all_dlcs()) pipeline.install_all_dlcs(entry_);
+        if (active_tab_ == InspectorTab::Dlc && can_install_all_dlcs()) {
+            pipeline.install_all_dlcs(entry_);
+        }
         return true;
     }
+
     return false;
 }
 
 std::vector<ButtonPrompt> GameInspector::get_contextual_prompts() const {
     std::vector<ButtonPrompt> prompts{
         {ButtonGlyph::Circle, "Back", true, false},
-        {ButtonGlyph::DPadLeftRight, "Switch Game / DLC / Update", true, false},
+        {ButtonGlyph::DPadLeftRight, "Switch Tab / Action", true, false},
         {ButtonGlyph::DPadUpDown, "Navigate", true, false}
     };
-    if (can_install_selected()) prompts.push_back({ButtonGlyph::Cross, "Install Selected", true, true});
-    if (active_tab_ == InspectorTab::Dlc && can_install_all_dlcs()) prompts.push_back({ButtonGlyph::Triangle, "Install All DLCs", true, false});
+    if (can_install_selected()) {
+        prompts.push_back({ButtonGlyph::Cross, "Install Selected", true, true});
+    }
+    if (active_tab_ == InspectorTab::Dlc && can_install_all_dlcs()) {
+        prompts.push_back({ButtonGlyph::Triangle, "Install All DLCs", true, false});
+    }
     return prompts;
 }
 
 void GameInspector::sync_with_pipeline(const InstallPipeline& pipeline) {
     for (auto& detail : current_tab_items_) {
-        const auto tasks = pipeline.all_tasks();
-        for (const auto& task : tasks) {
-            if (task.source_path == detail.absolute_path || task.package_filename == detail.filename) {
-                detail.install_status = task.status;
-                detail.progress_percent = task.progress_percent();
-                switch (task.status) {
-                    case InstallStatus::Queued: detail.status_badge = "QUEUED"; break;
-                    case InstallStatus::InProgress: detail.status_badge = "INSTALLING (" + std::to_string(task.progress_percent()) + "%)"; break;
-                    case InstallStatus::Completed: detail.status_badge = "INSTALLED"; break;
-                    case InstallStatus::Failed: detail.status_badge = "FAILED: " + task.error_message; break;
-                    case InstallStatus::Cancelled: detail.status_badge = "CANCELLED"; break;
-                }
+        const auto task = pipeline.get_task_by_path(detail.absolute_path);
+        if (task.has_value()) {
+            detail.install_status = task->status;
+            detail.error_code = task->error_code;
+            detail.error_message = task->error_message;
+            detail.recovery_guidance = task->recovery_guidance;
+            detail.progress_percent = task->progress_percent();
+
+            switch (task->status) {
+                case InstallStatus::Queued:
+                    detail.status_badge = "QUEUED";
+                    break;
+                case InstallStatus::InProgress:
+                    detail.status_badge = "INSTALLING (" + std::to_string(task->progress_percent()) + "%)";
+                    break;
+                case InstallStatus::Completed:
+                    detail.status_badge = "INSTALLED";
+                    break;
+                case InstallStatus::Failed:
+                    detail.status_badge = "FAILED: " + (task->error_message.empty() ? to_string(task->error_code) : task->error_message);
+                    break;
+                case InstallStatus::Cancelled:
+                    detail.status_badge = "CANCELLED";
+                    break;
+                case InstallStatus::Interrupted:
+                    detail.status_badge = "INTERRUPTED (Restarted)";
+                    break;
             }
         }
     }

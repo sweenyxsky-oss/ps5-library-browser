@@ -74,3 +74,8 @@ add_test(NAME ui_shell_test COMMAND ui_shell_test)
 add_executable(inspector_installer_test tests/inspector_installer_test.cpp)
 target_link_libraries(inspector_installer_test PRIVATE ps5_library_core Threads::Threads)
 add_test(NAME inspector_installer_test COMMAND inspector_installer_test)
+
+# Milestone 4 extension: PS5 install delegate, persistence, recovery and refresh tests
+add_executable(ps5_installer_persistence_test tests/ps5_installer_persistence_test.cpp)
+target_link_libraries(ps5_installer_persistence_test PRIVATE ps5_library_core Threads::Threads)
+add_test(NAME ps5_installer_persistence_test COMMAND ps5_installer_persistence_test)
