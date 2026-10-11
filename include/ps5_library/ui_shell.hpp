@@ -6,6 +6,8 @@
 #include "daemon_client.hpp"
 #include "input.hpp"
 #include "views.hpp"
+#include "installer.hpp"
+#include "inspector.hpp"
 
 #include <string>
 #include <vector>
@@ -67,6 +69,17 @@ public:
     void set_focused_index(size_t index);
     std::optional<GameEntry> focused_entry() const;
 
+    // Inspector state and controls
+    bool is_inspector_open() const { return inspector_ != nullptr; }
+    GameInspector* inspector() { return inspector_.get(); }
+    const GameInspector* inspector() const { return inspector_.get(); }
+    void open_inspector(const GameEntry& entry);
+    void close_inspector();
+
+    // Installer pipeline access
+    std::shared_ptr<InstallPipeline> installer() const { return installer_; }
+    void set_installer(std::shared_ptr<InstallPipeline> installer) { installer_ = std::move(installer); }
+
     // Dialog state
     DialogType active_dialog() const { return dialog_model_.type; }
     const DialogModel& dialog_model() const { return dialog_model_; }
@@ -109,6 +122,9 @@ private:
     ScannerEngine scanner_;
     IndexCache cache_;
     std::shared_ptr<DaemonLock> daemon_client_;
+
+    std::unique_ptr<GameInspector> inspector_;
+    std::shared_ptr<InstallPipeline> installer_;
 
     void update_filtered_entries();
     void enforce_daemon_gate_if_needed();

@@ -28,6 +28,8 @@ add_library(ps5_library_core STATIC
     src/input.cpp
     src/views.cpp
     src/ui_shell.cpp
+    src/installer.cpp
+    src/inspector.cpp
 )
 
 target_include_directories(ps5_library_core PUBLIC
@@ -67,3 +69,8 @@ add_test(NAME scanner_cache_test COMMAND scanner_cache_test)
 add_executable(ui_shell_test tests/ui_shell_test.cpp)
 target_link_libraries(ui_shell_test PRIVATE ps5_library_core Threads::Threads)
 add_test(NAME ui_shell_test COMMAND ui_shell_test)
+
+# Milestone 4 package inspector and install pipeline tests
+add_executable(inspector_installer_test tests/inspector_installer_test.cpp)
+target_link_libraries(inspector_installer_test PRIVATE ps5_library_core Threads::Threads)
+add_test(NAME inspector_installer_test COMMAND inspector_installer_test)

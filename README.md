@@ -1,35 +1,36 @@
-# PS5 Library Browser (`ps5-library-browser`)
+# PS5 Library Browser
 
-[![CI Build & Test](https://github.com/sweenyxsky-oss/ps5-library-browser/actions/workflows/ci.yml/badge.svg)](https://github.com/sweenyxsky-oss/ps5-library-browser/actions/workflows/ci.yml)
-[![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.wikipedia.org/wiki/C%2B%2B20)
-[![Platform](https://img.shields.io/badge/Platform-PlayStation%205-003791.svg)](https://github.com/sweenyxsky-oss/ps5-payload-sdk)
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+A high-performance, native PS5 library manager and game browser inspired by **Itemzflow**, engineered in modern **C++20**.
 
-A clean, modern, native PS5 Game Library Browser & Launcher inspired by Itemzflow's frontend presentation, engineered from the ground up in modern C++20 for speed, stability, and clean architecture.
-
-Designed specifically for remote network storage (NFS) and local drives, featuring instantaneous cached indexing, granular Game/DLC/Update inspectors, bulk package installers, and companion integration with the **ShadowMountPlus** daemon.
+`ps5-library-browser` provides an intuitive interface for managing local and network-mounted game libraries, inspecting title packages (Base Games, Add-on DLCs, Title Updates), and managing multi-item installation queues with full **ShadowMountPlus** integration.
 
 ---
 
-## 🚀 Key Features
+## 🌟 Key Features
 
-### 1. Dual Mode Library View
-- **Installed Games**: Fast view of games installed on internal/extended storage.
-- **Library Browser**: Remote NFS / hostapp repository browser.
-- Instant toggle between Installed and Remote modes with DualSense Triangle (`△`).
-- Gated behind ShadowMountPlus health verification for remote browsing.
+### 1. Game, DLC & Update Package Inspector
+- **Header & Outside Info**: Displays game title, Title ID (`PPSA` / `CUSA`), cover art, base game size, primary format (`PKG`, `exFAT`, `FFPKG`), and total package footprint.
+- **Three Dedicated Section Tabs**: Quick navigation between **Game**, **DLC**, and **Update** package sections.
+- **Formatted & Highlighted Package Details**: Displays filename, human-readable size, highlighted file format badges (`[.PKG]`, `[.EXFAT]`, `[.FFPKG]`), version numbers, and live installation status.
+- **Per-Item Install Actions**: Install individual base games, specific DLC packages, or individual title updates directly.
+- **DLC "Install All" Pipeline**: One-touch batch installation of all DLC add-ons with cumulative progress, item-level status tracking, cancellation, and granular failure reporting.
 
-### 2. Dual Presentation Layouts
-- **Scrolling Covers (Coverflow Carousel)**: Horizontal carousel with focused card enlargement, depth layering, and perspective falloff.
-- **Blocks (Grid View)**: 5-column 2D grid layout with multi-axis DualSense navigation and viewport scroll tracking.
-- Toggle layout instantly with Touchpad or Options button.
+### 2. Dual-Mode Library Architecture
+- **Installed Games Mode**: Instant local launcher for installed applications on the PS5.
+- **Library Browser Mode**: Browses local storage (`/hostapp`), custom directories, and remote NFS mounts.
+- **ShadowMountPlus Feature Lock**: Browsing remote libraries is gated behind a live health check to the local **ShadowMountPlus** daemon (`127.0.0.1:10101`). If the daemon is absent, the user is presented with a clear lock dialog explaining that ShadowMount Plus is required.
 
-### 3. DualSense Controller Navigation & On-Screen Prompts
+### 3. Native Dual-View Carousel & Block Grid
+- **Coverflow Carousel**: 3D-styled cover art carousel with real-time scaling, depth ordering, and smooth scrolling.
+- **5-Column Block Grid**: High-density library grid view optimized for large game collections.
+- **Format Filters & Live Search**: Filter entries instantly by format (`PKG`, `exFAT`, `FFPKG`, `Folder`) or search by title and Title ID.
+
+### 4. DualSense Input & Prompts
 - Native mapping for DualSense D-Pad and analog stick navigation with deadzone and auto-repeat support.
-- Dynamic contextual button prompt bar (`△ Toggle Mode`, `Touchpad View`, `L1/R1 Filter`, `□ Inspect`, `✕ Select`, `○ Back`).
+- Dynamic contextual button prompt bar (`△ Toggle Mode / Install All DLCs`, `Touchpad View`, `L1/R1 Filter / Tabs`, `□ Inspect`, `✕ Select / Install`, `○ Back`).
 - Modal dialogs for connection recovery and lock explanations.
 
-### 4. High-Speed Scanner & Persistent Cached Indexing
+### 5. High-Speed Scanner & Persistent Cached Indexing
 - Scans `/hostapp`, local folders, and network mounts.
 - Decodes `sce_sys/param.json` categories (`gd` base game, `gp` patch, `ac` DLC) and title ID tags (`PPSA` / `CUSA`).
 - Atomic JSON cache engine ensures zero-latency library startup.
@@ -40,29 +41,57 @@ Designed specifically for remote network storage (NFS) and local drives, featuri
 
 ```
 ps5-library-browser/
-├── .github/workflows/ci.yml      # Automated host build & unit test CI workflow
-├── CMakeLists.txt                # Cross-platform CMake configuration
+├── .github/workflows/ci.yml         # Automated host build & unit test CI workflow
+├── CMakeLists.txt                   # Cross-platform CMake configuration
 ├── include/ps5_library/
-│   ├── daemon_client.hpp         # ShadowMountPlus daemon probe & feature gate
-│   ├── game_metadata.hpp         # Metadata parser, categories, and models
-│   ├── scanner.hpp               # Recursive multi-source scanner
-│   ├── index_cache.hpp           # Atomic persistent cache & query filters
-│   ├── input.hpp                 # DualSense pad mapping & prompt model
-│   ├── views.hpp                 # Coverflow & Block Grid layout calculations
-│   └── ui_shell.hpp              # Native UI shell, state machine & dialogs
+│   ├── daemon_client.hpp            # ShadowMountPlus daemon probe & feature gate
+│   ├── game_metadata.hpp            # Metadata parser, categories, and models
+│   ├── scanner.hpp                  # Recursive multi-source scanner
+│   ├── index_cache.hpp              # Atomic persistent cache & query filters
+│   ├── input.hpp                    # DualSense pad mapping & prompt model
+│   ├── views.hpp                    # Coverflow & Block Grid layout calculations
+│   ├── installer.hpp                # Install pipeline, delegates & batch engine
+│   ├── inspector.hpp                # Package inspector state, formatting & tabs
+│   └── ui_shell.hpp                 # Native UI shell, state machine & dialogs
 ├── src/
-│   ├── daemon_client.cpp         # Socket client & lock manager
-│   ├── game_metadata.cpp         # Param parser & Title ID heuristics
-│   ├── scanner.cpp               # Directory scanner & grouping
-│   ├── index_cache.cpp           # Atomic cache implementation
-│   ├── input.cpp                 # Input processing & repeat timer
-│   ├── views.cpp                 # Coverflow & Grid card positioning
-│   └── ui_shell.cpp              # UI shell flow & input routing
+│   ├── daemon_client.cpp            # Socket client & lock manager
+│   ├── game_metadata.cpp            # Param parser & Title ID heuristics
+│   ├── scanner.cpp                  # Directory scanner & grouping
+│   ├── index_cache.cpp              # Atomic cache implementation
+│   ├── input.cpp                    # Input processing & repeat timer
+│   ├── views.cpp                    # Coverflow & Grid card positioning
+│   ├── installer.cpp                # Install task queue & DLC batch execution
+│   ├── inspector.cpp                # Package formatting & inspector navigation
+│   └── ui_shell.cpp                 # UI shell flow & input routing
 ├── tests/
-│   ├── daemon_client_test.cpp    # Milestone 1 tests
-│   ├── scanner_cache_test.cpp    # Milestone 2 tests
-│   └── ui_shell_test.cpp         # Milestone 3 tests
+│   ├── daemon_client_test.cpp       # Milestone 1 tests
+│   ├── scanner_cache_test.cpp       # Milestone 2 tests
+│   ├── ui_shell_test.cpp            # Milestone 3 tests
+│   └── inspector_installer_test.cpp # Milestone 4 tests
 └── README.md
+```
+
+---
+
+## 🛠️ Building & Testing
+
+### Prerequisites
+- Modern C++20 compiler (`gcc` 10+, `clang` 11+, or MSVC 2019+)
+- CMake 3.16+
+- POSIX-compatible host or PS5 homebrew SDK environment
+
+### Build Commands
+```bash
+# Clone the repository
+git clone https://github.com/sweenyxsky-oss/ps5-library-browser.git
+cd ps5-library-browser
+
+# Configure and compile
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc)
+
+# Execute test suite
+ctest --test-dir build --output-on-failure
 ```
 
 ---
@@ -70,15 +99,26 @@ ps5-library-browser/
 ## 🛣️ Development Roadmap
 
 - [x] **Milestone 1: Daemon Health Probe & Feature Lock Engine**
+  - Socket HTTP client with non-blocking polling and timeout controls
+  - Feature gating with mandatory prompt: *"ShadowMount Plus is required to unlock these features"*
+  - Automated mock daemon test suite
 - [x] **Milestone 2: High-Speed Game Scanner, Metadata Classifier & Atomic Index Cache**
+  - Fast traversal of `/hostapp` and mounted paths
+  - `sce_sys/param.json` parser classifying Base Games (`gd`), Updates (`gp`), and DLCs (`ac`)
+  - Title ID validation (`PPSA`, `CUSA`, `LAPY`, `FAKE`)
+  - Atomic JSON v2 cache with PID/timestamp temporary file write and atomic rename
 - [x] **Milestone 3: Native Dual-Mode UI Engine & DualSense Navigation**
   - Mode toggle: Installed Games vs Library Browser
   - Gated remote browser requiring ShadowMountPlus daemon
   - Selectable views: Coverflow carousel and 5-column Block Grid
   - Format filters (PKG, exFAT, FFPKG, Folder) and live search
   - Contextual DualSense button prompt bar and input repeat handling
-- [ ] **Milestone 4: Game Inspector & Multi-Installer**
-- [ ] **Milestone 5: PS5 Payload Packaging & Hardware CI**
+- [x] **Milestone 4: Game/DLC/Update Package Inspector & Multi-Installer**
+  - Package Inspector with Game, DLC, and Update section tabs
+  - Formatted package metadata with highlighted file extensions (`[.PKG]`, `[.EXFAT]`, `[.FFPKG]`) and human-readable sizes
+  - Per-item install triggers for games, DLCs, and updates
+  - "Install All DLCs" pipeline with progress callbacks, cancellation, and granular failure recovery
+- [ ] **Milestone 5: PS5 Payload Packaging & Hardware Integration**
 
 ---
 

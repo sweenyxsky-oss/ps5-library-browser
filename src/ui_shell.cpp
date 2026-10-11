@@ -8,7 +8,8 @@ namespace ps5_library {
 UiShell::UiShell(std::shared_ptr<DaemonLock> daemon_client,
                  std::string cache_path)
     : cache_(std::move(cache_path)),
-      daemon_client_(daemon_client ? daemon_client : std::make_shared<DaemonLock>()) {
+      daemon_client_(daemon_client ? daemon_client : std::make_shared<DaemonLock>()),
+      installer_(std::make_shared<InstallPipeline>()) {
     // Attempt fast index load on startup
     std::vector<GameEntry> cached_entries;
     if (cache_.load(cached_entries)) {
@@ -96,6 +97,17 @@ std::optional<GameEntry> UiShell::focused_entry() const {
     return filtered_entries_[focused_index_];
 }
 
+void UiShell::open_inspector(const GameEntry& entry) {
+    inspector_ = std::make_unique<GameInspector>(entry);
+    if (installer_) {
+        inspector_->sync_with_pipeline(*installer_);
+    }
+}
+
+void UiShell::close_inspector() {
+    inspector_.reset();
+}
+
 void UiShell::show_shadowmount_lock() {
     dialog_model_.type = DialogType::ShadowMountLock;
     dialog_model_.title = "Feature Locked";
@@ -173,6 +185,17 @@ bool UiShell::handle_pad_input(const InputManager& input) {
         return true;
     }
 
+    // If inspector is open, delegate input to inspector
+    if (is_inspector_open()) {
+        if (input.action_triggered(LogicalAction::Cancel)) {
+            close_inspector();
+            return true;
+        }
+        bool handled = inspector_->handle_pad_input(input, *installer_);
+        inspector_->sync_with_pipeline(*installer_);
+        return handled;
+    }
+
     // Main screen input handling
     // 1. Mode toggle (Triangle)
     if (input.action_triggered(LogicalAction::ToggleMode)) {
@@ -242,13 +265,18 @@ bool UiShell::handle_pad_input(const InputManager& input) {
 
     // 6. Inspect Game (Square)
     if (input.action_triggered(LogicalAction::Inspect)) {
-        // Triggers game inspector dialog or detail view
-        return true;
+        if (auto entry = focused_entry()) {
+            open_inspector(*entry);
+            return true;
+        }
     }
 
     // 7. Confirm / Launch (Cross)
     if (input.action_triggered(LogicalAction::Confirm)) {
-        return true;
+        if (auto entry = focused_entry()) {
+            open_inspector(*entry);
+            return true;
+        }
     }
 
     return false;
@@ -263,6 +291,10 @@ std::vector<CardVisual> UiShell::get_current_view_cards() const {
 }
 
 std::vector<ButtonPrompt> UiShell::get_contextual_prompts() const {
+    if (is_inspector_open()) {
+        return inspector_->get_contextual_prompts();
+    }
+
     std::vector<ButtonPrompt> prompts;
 
     if (dialog_model_.type == DialogType::ShadowMountLock) {
