@@ -6,6 +6,7 @@
 #include <atomic>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <unistd.h>
 #include <cstring>
 #include <sstream>
@@ -40,6 +41,7 @@ public:
 
         int bind_res = bind(server_fd_, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr));
         assert(bind_res == 0);
+        (void)bind_res;
 
         socklen_t len = sizeof(addr);
         getsockname(server_fd_, reinterpret_cast<struct sockaddr*>(&addr), &len);
@@ -50,19 +52,23 @@ public:
 
         worker_ = std::thread([this]() {
             while (running_.load()) {
-                struct timeval tv{0, 200000}; // 200ms
-                fd_set read_fds;
-                FD_ZERO(&read_fds);
-                FD_SET(server_fd_, &read_fds);
+                int fd = server_fd_;
+                if (fd < 0) {
+                    break;
+                }
 
-                int sel = select(server_fd_ + 1, &read_fds, nullptr, nullptr, &tv);
-                if (sel <= 0 || !FD_ISSET(server_fd_, &read_fds)) {
+                struct pollfd pfd{};
+                pfd.fd = fd;
+                pfd.events = POLLIN;
+
+                int pr = poll(&pfd, 1, 100);
+                if (!running_.load() || pr <= 0 || !(pfd.revents & POLLIN)) {
                     continue;
                 }
 
                 struct sockaddr_in client_addr{};
                 socklen_t clen = sizeof(client_addr);
-                int client_fd = accept(server_fd_, reinterpret_cast<struct sockaddr*>(&client_addr), &clen);
+                int client_fd = accept(fd, reinterpret_cast<struct sockaddr*>(&client_addr), &clen);
                 if (client_fd < 0) continue;
 
                 char buffer[1024];
@@ -87,9 +93,10 @@ public:
 
     void stop() {
         if (running_.exchange(false)) {
-            if (server_fd_ >= 0) {
-                close(server_fd_);
-                server_fd_ = -1;
+            int fd = server_fd_;
+            server_fd_ = -1;
+            if (fd >= 0) {
+                close(fd);
             }
             if (worker_.joinable()) {
                 worker_.join();
