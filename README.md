@@ -127,6 +127,10 @@ ctest --test-dir build --output-on-failure
   - **Install Preflight Validation**: Multi-stage verification inspecting file existence, readability, storage capacity against package size (with configurable safety margin), and header signature format (`.pkg` magic `\x7FPKG`/`PKG\0`, `.ffpkg`/`.exfat` header sizes); prevents corrupt package dispatches before calling target install delegates.
   - **Duplicate Prevention & Retry Workflow**: Preflight duplicate detection prevents queueing conflicting installs for already active/queued jobs, while dedicated retry actions preserve original task IDs, prior error codes/messages, retry counters, and timestamps.
   - **Searchable Install History & Diagnostics**: Full job diagnostic history recording submission/completion timestamps, package identifiers, failure reasons, retry provenance, and step-by-step remediation guidance; accessible via the UI Shell history dialog.
+  - **CSV & JSON Install History Export**: Export complete diagnostic logs with timestamps, Title IDs, filenames, format, size/byte counts, outcomes, error details, recovery steps, and retry ancestry (`original_task_id`, `original_error_code`, `retry_count`) directly to file or string buffers.
+  - **Granular History Filtering & Multi-Key Sorting**: Multi-criteria filtering by install outcome (`Completed`, `Failed`, `Interrupted`, `Cancelled`, `Queued`, `InProgress`), package format (`pkg`, `exfat`, `ffpkg`, `folder`), and ISO 8601 date ranges; sortable ascending or descending by timestamp or package filename.
+  - **Retry Confirmation Modal with Live Preflight Verification**: Interactive UI modal surfacing prior failure diagnostics and re-executing live preflight checks to ensure errors are resolved before requeueing.
+  - **Per-Check Preflight Summary**: Clear per-check diagnostic breakdown across File Readability, Package Metadata/Header, and Available Storage with safety margins before dispatching to the installer.
 - [ ] **Milestone 5: PS5 Payload Packaging & Hardware Integration**
 
 ---

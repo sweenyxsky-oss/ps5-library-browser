@@ -2,8 +2,11 @@
 
 #include <algorithm>
 #include <cctype>
+#include <sstream>
+#include <nlohmann/json.hpp>
 
 namespace ps5_library {
+using nlohmann::json;
 
 UiShell::UiShell(std::shared_ptr<DaemonLock> daemon_client,
                  std::string cache_path,
@@ -31,7 +34,6 @@ void UiShell::setup_pipeline_callbacks() {
         if (task.status == InstallStatus::Completed) {
             refresh_after_install(task.title_id, task.source_path);
         } else if (task.status == InstallStatus::Failed || task.status == InstallStatus::Interrupted) {
-            // Keep inspector in sync if open
             if (inspector_) {
                 inspector_->sync_with_pipeline(*installer_);
             }
@@ -159,12 +161,91 @@ void UiShell::show_recovery_guidance(const std::string& title,
     dialog_model_.extra_payload = steps;
 }
 
-
 void UiShell::show_install_history() {
     dialog_model_.type = DialogType::InstallHistory;
     dialog_model_.title = "Install History & Diagnostics";
     history_selected_index_ = 0;
     update_history_view();
+}
+
+void UiShell::show_retry_confirmation(const InstallTask& task) {
+    dialog_model_.type = DialogType::RetryConfirmation;
+    dialog_model_.title = "Confirm Retry: " + task.display_name;
+
+    std::string target_dir = installer_ ? installer_->target_storage_dir() : "/user/app";
+    const auto preflight = run_package_preflight(task.source_path, target_dir);
+
+    std::ostringstream ss;
+    ss << "Original Failure Details:\n";
+    ss << "- Task ID: " << task.task_id << " (Attempt #" << (task.retry_count + 1) << ")\n";
+    ss << "- Failure Code: [" << install_error_name(task.error_code) << "] " << to_string(task.error_code) << "\n";
+    if (!task.error_message.empty()) {
+        ss << "- Error Message: " << task.error_message << "\n";
+    }
+    if (!task.completed_timestamp.empty()) {
+        ss << "- Failed Timestamp: " << task.completed_timestamp << "\n";
+    }
+    ss << "\n" << preflight.summary.formatted_summary();
+
+    dialog_model_.message = preflight.passed
+        ? "Preflight checks passed on re-run. Proceed with job retry?"
+        : "Preflight checks failed on re-run: " + preflight.error_message;
+    dialog_model_.secondary_text = ss.str();
+
+    if (preflight.passed) {
+        dialog_model_.options = {"Confirm Retry", "Cancel"};
+    } else {
+        dialog_model_.options = {"Dismiss"};
+    }
+    dialog_model_.selected_option = 0;
+
+    json payload;
+    payload["task_id"] = task.task_id;
+    payload["source_path"] = task.source_path;
+    payload["passed"] = preflight.passed;
+    dialog_model_.extra_payload = payload.dump();
+}
+
+void UiShell::show_preflight_summary(const GameItem& item, const std::string& title_id) {
+    dialog_model_.type = DialogType::PreflightSummary;
+    dialog_model_.title = "Preflight Inspection: " + item.filename;
+
+    std::string target_dir = installer_ ? installer_->target_storage_dir() : "/user/app";
+    const auto preflight = run_package_preflight(item.absolute_path, target_dir);
+
+    dialog_model_.message = preflight.passed
+        ? "All preflight checks passed. Package is ready for installation."
+        : "Preflight check failed: " + preflight.error_message;
+    dialog_model_.secondary_text = preflight.summary.formatted_summary();
+
+    if (preflight.passed) {
+        dialog_model_.options = {"Proceed with Install", "Cancel"};
+    } else {
+        dialog_model_.options = {"Dismiss"};
+    }
+    dialog_model_.selected_option = 0;
+
+    json payload;
+    payload["title_id"] = title_id;
+    payload["filename"] = item.filename;
+    payload["absolute_path"] = item.absolute_path;
+    payload["format"] = item.format;
+    payload["size_bytes"] = item.size_bytes;
+    payload["display_name"] = item.display_name;
+    payload["version"] = item.version;
+    payload["kind"] = to_string(item.kind);
+    payload["passed"] = preflight.passed;
+    dialog_model_.extra_payload = payload.dump();
+}
+
+void UiShell::show_preflight_summary(const std::string& package_path, const std::string& title_id, const std::string& display_name) {
+    GameItem item;
+    item.filename = package_path.substr(package_path.find_last_of("/\\") + 1);
+    item.absolute_path = package_path;
+    item.display_name = display_name.empty() ? item.filename : display_name;
+    auto dot = item.filename.find_last_of('.');
+    if (dot != std::string::npos) item.format = item.filename.substr(dot + 1);
+    show_preflight_summary(item, title_id);
 }
 
 void UiShell::update_history_view() {
@@ -174,26 +255,37 @@ void UiShell::update_history_view() {
         dialog_model_.secondary_text.clear();
         return;
     }
-    history_items_ = installer_->search_history(history_search_query_);
+
+    history_filter_options_.query = history_search_query_;
+    history_items_ = installer_->filter_and_sort_history(history_filter_options_);
+
+    std::string badge = "[Status: " + (history_filter_options_.outcome_filter ? std::string(to_string(*history_filter_options_.outcome_filter)) : "All") +
+                        " | Format: " + (history_filter_options_.format_filter.empty() ? "All" : history_filter_options_.format_filter) +
+                        " | Sort: " + to_string(history_filter_options_.sort_field) + " " + to_string(history_filter_options_.sort_order) + "]";
+
     if (history_items_.empty()) {
         history_selected_index_ = 0;
         dialog_model_.message = history_search_query_.empty() ? "No install jobs recorded" : "No jobs matching query: " + history_search_query_;
-        dialog_model_.secondary_text = "Press Square to search, Circle to close.";
+        dialog_model_.secondary_text = badge + "\n△ Filter Status | □ Filter Format | L1/R1 Sort | ○ Close";
         return;
     }
+
     if (history_selected_index_ >= history_items_.size()) {
         history_selected_index_ = history_items_.size() - 1;
     }
+
     const auto& selected = history_items_[history_selected_index_];
     dialog_model_.message = "[" + std::to_string(history_selected_index_ + 1) + "/" + std::to_string(history_items_.size()) + "] " +
                             selected.display_name + " (" + selected.title_id + ") - " + to_string(selected.status);
-    std::string sec = "File: " + selected.package_filename + " | Format: " + selected.format + "\n";
+
+    std::string sec = badge + "\nFile: " + selected.package_filename + " | Format: " + selected.format + "\n";
     sec += "Created: " + (selected.created_timestamp.empty() ? "Unknown" : selected.created_timestamp);
     if (!selected.completed_timestamp.empty()) {
         sec += " | Completed: " + selected.completed_timestamp;
     }
     if (selected.retry_count > 0) {
-        sec += "\nRetry #" + std::to_string(selected.retry_count) + " (Orig Task: " + selected.original_task_id + ", Orig Error: " + to_string(selected.original_error_code) + ")";
+        sec += "\nRetry #" + std::to_string(selected.retry_count) + " (Orig Task: " + selected.original_task_id +
+               ", Orig Error: [" + install_error_name(selected.original_error_code) + "])";
     }
     if (!selected.error_message.empty()) {
         sec += "\nError: " + selected.error_message;
@@ -229,6 +321,102 @@ std::optional<InstallTask> UiShell::selected_history_item() const {
     return std::nullopt;
 }
 
+void UiShell::set_history_filter_options(const HistoryFilterOptions& options) {
+    history_filter_options_ = options;
+    history_selected_index_ = 0;
+    update_history_view();
+}
+
+void UiShell::set_history_outcome_filter(std::optional<InstallStatus> outcome) {
+    history_filter_options_.outcome_filter = outcome;
+    history_selected_index_ = 0;
+    update_history_view();
+}
+
+void UiShell::set_history_format_filter(const std::string& format) {
+    history_filter_options_.format_filter = format;
+    history_selected_index_ = 0;
+    update_history_view();
+}
+
+void UiShell::set_history_date_range(const std::string& from, const std::string& to) {
+    history_filter_options_.date_from = from;
+    history_filter_options_.date_to = to;
+    history_selected_index_ = 0;
+    update_history_view();
+}
+
+void UiShell::set_history_sort(HistorySortField field, HistorySortOrder order) {
+    history_filter_options_.sort_field = field;
+    history_filter_options_.sort_order = order;
+    history_selected_index_ = 0;
+    update_history_view();
+}
+
+void UiShell::cycle_history_outcome_filter() {
+    if (!history_filter_options_.outcome_filter.has_value()) {
+        history_filter_options_.outcome_filter = InstallStatus::Failed;
+    } else if (*history_filter_options_.outcome_filter == InstallStatus::Failed) {
+        history_filter_options_.outcome_filter = InstallStatus::Interrupted;
+    } else if (*history_filter_options_.outcome_filter == InstallStatus::Interrupted) {
+        history_filter_options_.outcome_filter = InstallStatus::Completed;
+    } else if (*history_filter_options_.outcome_filter == InstallStatus::Completed) {
+        history_filter_options_.outcome_filter = InstallStatus::Queued;
+    } else {
+        history_filter_options_.outcome_filter = std::nullopt;
+    }
+    history_selected_index_ = 0;
+    update_history_view();
+}
+
+void UiShell::cycle_history_format_filter() {
+    if (history_filter_options_.format_filter.empty()) {
+        history_filter_options_.format_filter = "pkg";
+    } else if (history_filter_options_.format_filter == "pkg") {
+        history_filter_options_.format_filter = "ffpkg";
+    } else if (history_filter_options_.format_filter == "ffpkg") {
+        history_filter_options_.format_filter = "exfat";
+    } else {
+        history_filter_options_.format_filter.clear();
+    }
+    history_selected_index_ = 0;
+    update_history_view();
+}
+
+void UiShell::cycle_history_sort() {
+    if (history_filter_options_.sort_field == HistorySortField::Timestamp &&
+        history_filter_options_.sort_order == HistorySortOrder::Descending) {
+        history_filter_options_.sort_order = HistorySortOrder::Ascending;
+    } else if (history_filter_options_.sort_field == HistorySortField::Timestamp &&
+               history_filter_options_.sort_order == HistorySortOrder::Ascending) {
+        history_filter_options_.sort_field = HistorySortField::PackageName;
+        history_filter_options_.sort_order = HistorySortOrder::Ascending;
+    } else if (history_filter_options_.sort_field == HistorySortField::PackageName &&
+               history_filter_options_.sort_order == HistorySortOrder::Ascending) {
+        history_filter_options_.sort_order = HistorySortOrder::Descending;
+    } else {
+        history_filter_options_.sort_field = HistorySortField::Timestamp;
+        history_filter_options_.sort_order = HistorySortOrder::Descending;
+    }
+    history_selected_index_ = 0;
+    update_history_view();
+}
+
+std::string UiShell::export_history_json(int indent) const {
+    if (!installer_) return "[]";
+    return installer_->export_history_to_json(history_items_, indent);
+}
+
+std::string UiShell::export_history_csv() const {
+    if (!installer_) return "";
+    return installer_->export_history_to_csv(history_items_);
+}
+
+bool UiShell::export_history_to_file(const std::string& filepath, bool as_json) const {
+    if (!installer_) return false;
+    return installer_->export_history_to_file(filepath, history_items_, as_json);
+}
+
 void UiShell::dismiss_dialog() {
     dialog_model_.type = DialogType::None;
     dialog_model_.title.clear();
@@ -251,13 +439,11 @@ bool UiShell::is_title_installed(const std::string& title_id) const {
 
 void UiShell::refresh_after_install(const std::string& title_id, const std::string& installed_path) {
     (void)installed_path;
-    // 1. Refresh entry inside all_entries_ if present
     for (auto& entry : all_entries_) {
         if (entry.title_id == title_id) {
             entry.confidence = MetadataConfidence::Verified;
             entry.calculate_totals();
 
-            // 2. If inspector is currently viewing this title, update its model
             if (inspector_ && inspector_->title_id() == title_id) {
                 inspector_->update_entry(entry);
                 if (installer_) {
@@ -268,7 +454,6 @@ void UiShell::refresh_after_install(const std::string& title_id, const std::stri
         }
     }
 
-    // 3. Persist updated cache
     cache_.save_atomic(all_entries_, current_scan_path_);
     update_filtered_entries();
 
@@ -278,7 +463,6 @@ void UiShell::refresh_after_install(const std::string& title_id, const std::stri
 }
 
 void UiShell::update_filtered_entries() {
-    // 1. Format filter
     std::string fmt_str;
     switch (format_filter_) {
         case FormatFilter::Pkg:    fmt_str = "pkg"; break;
@@ -295,7 +479,6 @@ void UiShell::update_filtered_entries() {
         temp = IndexCache::filter_by_format(all_entries_, fmt_str);
     }
 
-    // 2. Search query filter
     if (!search_query_.empty()) {
         filtered_entries_ = IndexCache::search(temp, search_query_);
     } else {
@@ -310,11 +493,9 @@ void UiShell::update_filtered_entries() {
 }
 
 bool UiShell::handle_pad_input(const InputManager& input) {
-    // Handle dialog input first
     if (dialog_model_.type != DialogType::None) {
         if (dialog_model_.type == DialogType::ShadowMountLock) {
             if (input.action_triggered(LogicalAction::Confirm)) {
-                // Retry probe
                 if (daemon_client_) {
                     daemon_client_->probe();
                 }
@@ -347,15 +528,89 @@ bool UiShell::handle_pad_input(const InputManager& input) {
                 history_select_prev();
                 return true;
             }
+            if (input.action_triggered(LogicalAction::ToggleMode)) {
+                cycle_history_outcome_filter();
+                return true;
+            }
+            if (input.action_triggered(LogicalAction::Inspect)) {
+                cycle_history_format_filter();
+                return true;
+            }
+            if (input.action_triggered(LogicalAction::PrevFilter) || input.action_triggered(LogicalAction::NextFilter)) {
+                cycle_history_sort();
+                return true;
+            }
             if (input.action_triggered(LogicalAction::Confirm)) {
-                // If selected task is failed, retry it
                 const auto selected = selected_history_item();
                 if (selected && (selected->status == InstallStatus::Failed || selected->status == InstallStatus::Interrupted)) {
-                    if (installer_) {
-                        installer_->retry_task(selected->task_id);
-                        update_history_view();
-                    }
+                    show_retry_confirmation(*selected);
+                    return true;
                 }
+                return true;
+            }
+        } else if (dialog_model_.type == DialogType::RetryConfirmation) {
+            if (input.action_triggered(LogicalAction::Cancel)) {
+                dismiss_dialog();
+                return true;
+            }
+            if (input.action_triggered(LogicalAction::NavLeft) || input.action_triggered(LogicalAction::NavRight)) {
+                if (!dialog_model_.options.empty()) {
+                    dialog_model_.selected_option = (dialog_model_.selected_option + 1) % dialog_model_.options.size();
+                }
+                return true;
+            }
+            if (input.action_triggered(LogicalAction::Confirm)) {
+                if (!dialog_model_.options.empty() && dialog_model_.options[dialog_model_.selected_option] == "Confirm Retry") {
+                    try {
+                        json payload = json::parse(dialog_model_.extra_payload);
+                        std::string task_id = payload.value("task_id", "");
+                        if (installer_ && !task_id.empty()) {
+                            installer_->retry_task(task_id);
+                            update_history_view();
+                            if (is_inspector_open()) {
+                                inspector_->sync_with_pipeline(*installer_);
+                            }
+                        }
+                    } catch (...) {}
+                }
+                dismiss_dialog();
+                return true;
+            }
+        } else if (dialog_model_.type == DialogType::PreflightSummary) {
+            if (input.action_triggered(LogicalAction::Cancel)) {
+                dismiss_dialog();
+                return true;
+            }
+            if (input.action_triggered(LogicalAction::NavLeft) || input.action_triggered(LogicalAction::NavRight)) {
+                if (!dialog_model_.options.empty()) {
+                    dialog_model_.selected_option = (dialog_model_.selected_option + 1) % dialog_model_.options.size();
+                }
+                return true;
+            }
+            if (input.action_triggered(LogicalAction::Confirm)) {
+                if (!dialog_model_.options.empty() && dialog_model_.options[dialog_model_.selected_option] == "Proceed with Install") {
+                    try {
+                        json payload = json::parse(dialog_model_.extra_payload);
+                        GameItem item;
+                        item.filename = payload.value("filename", "");
+                        item.absolute_path = payload.value("absolute_path", "");
+                        item.format = payload.value("format", "");
+                        item.display_name = payload.value("display_name", "");
+                        item.size_bytes = payload.value("size_bytes", uint64_t{0});
+                        item.size_known = item.size_bytes > 0;
+                        item.formatted_size = format_file_size(item.size_bytes);
+                        item.version = payload.value("version", "");
+                        item.kind = parse_item_kind(payload.value("kind", "Unknown"));
+                        std::string title_id = payload.value("title_id", "");
+                        if (installer_) {
+                            installer_->queue_item(item, title_id);
+                            if (is_inspector_open()) {
+                                inspector_->sync_with_pipeline(*installer_);
+                            }
+                        }
+                    } catch (...) {}
+                }
+                dismiss_dialog();
                 return true;
             }
         } else {
@@ -367,14 +622,12 @@ bool UiShell::handle_pad_input(const InputManager& input) {
         return true;
     }
 
-    // If inspector is open, delegate input to inspector
     if (is_inspector_open()) {
         if (input.action_triggered(LogicalAction::Cancel)) {
             close_inspector();
             return true;
         }
 
-        // Check if user pressed Inspect (Square) on a failed package to view recovery steps
         if (input.action_triggered(LogicalAction::Inspect)) {
             const auto item = inspector_->selected_item();
             if (item.has_value() && (item->install_status == InstallStatus::Failed ||
@@ -386,25 +639,56 @@ bool UiShell::handle_pad_input(const InputManager& input) {
             }
         }
 
+        if (preflight_summary_before_dispatch_ && input.action_triggered(LogicalAction::Confirm)) {
+            if (inspector_->focus_section() == InspectorFocusSection::Actions) {
+                const auto labels = inspector_->available_action_labels();
+                if (inspector_->selected_action_button() < labels.size()) {
+                    const std::string& label = labels[inspector_->selected_action_button()];
+                    if (label == "Retry Install") {
+                        const auto selected = inspector_->selected_item();
+                        if (selected && selected->can_retry && installer_) {
+                            const auto task = installer_->get_task_by_path(selected->absolute_path);
+                            if (task) {
+                                show_retry_confirmation(*task);
+                                return true;
+                            }
+                        }
+                    } else if (label == "Install Selected") {
+                        const auto selected = inspector_->selected_item();
+                        if (selected && !selected->has_active_task) {
+                            GameItem item;
+                            item.kind = selected->kind;
+                            item.filename = selected->filename;
+                            item.absolute_path = selected->absolute_path;
+                            item.format = selected->extension.empty() ? "" : (selected->extension[0] == '.' ? selected->extension.substr(1) : selected->extension);
+                            item.size_bytes = selected->raw_size_bytes;
+                            item.size_known = selected->formatted_size != "Unknown";
+                            item.formatted_size = selected->formatted_size;
+                            item.version = selected->version;
+                            item.display_name = selected->display_name;
+                            show_preflight_summary(item, inspector_->title_id());
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
         bool handled = inspector_->handle_pad_input(input, *installer_);
-        inspector_->sync_with_pipeline(*installer_);
+        if (installer_) inspector_->sync_with_pipeline(*installer_);
         return handled;
     }
 
-    // Main screen input handling
-    // 1. Mode toggle (Triangle)
     if (input.action_triggered(LogicalAction::ToggleMode)) {
         toggle_library_mode();
         return true;
     }
 
-    // 2. Layout toggle (Touchpad / Options)
     if (input.action_triggered(LogicalAction::SwitchLayout)) {
         toggle_view_layout();
         return true;
     }
 
-    // 3. Format filters (L1 / R1)
     if (input.action_triggered(LogicalAction::PrevFilter)) {
         cycle_prev_filter();
         return true;
@@ -414,7 +698,6 @@ bool UiShell::handle_pad_input(const InputManager& input) {
         return true;
     }
 
-    // 4. Search toggle (L3 / R3)
     if (input.action_triggered(LogicalAction::OpenSearch)) {
         if (!search_query_.empty()) {
             set_search_query("");
@@ -426,7 +709,6 @@ bool UiShell::handle_pad_input(const InputManager& input) {
         return true;
     }
 
-    // 5. Navigation based on active view layout
     if (filtered_entries_.empty()) {
         return false;
     }
@@ -458,7 +740,6 @@ bool UiShell::handle_pad_input(const InputManager& input) {
         }
     }
 
-    // 6. Inspect Game (Square)
     if (input.action_triggered(LogicalAction::Inspect)) {
         if (auto entry = focused_entry()) {
             open_inspector(*entry);
@@ -466,7 +747,6 @@ bool UiShell::handle_pad_input(const InputManager& input) {
         }
     }
 
-    // 7. Confirm / Launch (Cross)
     if (input.action_triggered(LogicalAction::Confirm)) {
         if (auto entry = focused_entry()) {
             open_inspector(*entry);
@@ -488,7 +768,6 @@ std::vector<CardVisual> UiShell::get_current_view_cards() const {
 std::vector<ButtonPrompt> UiShell::get_contextual_prompts() const {
     if (is_inspector_open()) {
         auto prompts = inspector_->get_contextual_prompts();
-        // If selected item is failed, add prompt for Recovery Guidance
         const auto item = inspector_->selected_item();
         if (item.has_value() && (item->install_status == InstallStatus::Failed ||
                                  item->install_status == InstallStatus::Interrupted)) {
@@ -512,8 +791,33 @@ std::vector<ButtonPrompt> UiShell::get_contextual_prompts() const {
 
     if (dialog_model_.type == DialogType::InstallHistory) {
         prompts.push_back({ButtonGlyph::DPadUpDown, "Select Job", true, false});
-        prompts.push_back({ButtonGlyph::Cross, "Retry Failed", true, true});
+        prompts.push_back({ButtonGlyph::Cross, "Retry Selected", true, true});
+        prompts.push_back({ButtonGlyph::Triangle, "Filter Status", true, false});
+        prompts.push_back({ButtonGlyph::Square, "Filter Format", true, false});
+        prompts.push_back({ButtonGlyph::L1, "Sort (L1/R1)", true, false});
         prompts.push_back({ButtonGlyph::Circle, "Close History", true, false});
+        return prompts;
+    }
+
+    if (dialog_model_.type == DialogType::RetryConfirmation) {
+        if (!dialog_model_.options.empty() && dialog_model_.options[0] == "Confirm Retry") {
+            prompts.push_back({ButtonGlyph::Cross, "Confirm Retry", true, true});
+            prompts.push_back({ButtonGlyph::Circle, "Cancel", true, false});
+        } else {
+            prompts.push_back({ButtonGlyph::Cross, "Dismiss", true, true});
+            prompts.push_back({ButtonGlyph::Circle, "Close", true, false});
+        }
+        return prompts;
+    }
+
+    if (dialog_model_.type == DialogType::PreflightSummary) {
+        if (!dialog_model_.options.empty() && dialog_model_.options[0] == "Proceed with Install") {
+            prompts.push_back({ButtonGlyph::Cross, "Proceed Install", true, true});
+            prompts.push_back({ButtonGlyph::Circle, "Cancel", true, false});
+        } else {
+            prompts.push_back({ButtonGlyph::Cross, "Dismiss", true, true});
+            prompts.push_back({ButtonGlyph::Circle, "Close", true, false});
+        }
         return prompts;
     }
 
@@ -523,21 +827,17 @@ std::vector<ButtonPrompt> UiShell::get_contextual_prompts() const {
         return prompts;
     }
 
-    // Mode toggle prompt
     std::string mode_label = (library_mode_ == LibraryMode::InstalledGames)
                              ? "Library Browser" : "Installed Games";
     prompts.push_back({ButtonGlyph::Triangle, mode_label, true, false});
 
-    // View layout prompt
     std::string layout_label = (view_layout_ == ViewLayout::Coverflow)
                                ? "Grid View" : "Coverflow";
     prompts.push_back({ButtonGlyph::Touchpad, layout_label, true, false});
 
-    // Format filter prompt
     std::string filter_label = std::string("Filter: ") + to_string(format_filter_);
     prompts.push_back({ButtonGlyph::L1, filter_label, true, false});
 
-    // Game action prompts if games available
     if (!filtered_entries_.empty()) {
         prompts.push_back({ButtonGlyph::Square, "Inspect Game", true, false});
         prompts.push_back({ButtonGlyph::Cross, "Select / Launch", true, true});
@@ -560,7 +860,6 @@ void UiShell::trigger_scan(bool force_rescan,
     scanner_.start_async_scan(options, nullptr, [this, on_complete](std::vector<GameEntry> entries, ScanStatistics stats) {
         (void)stats;
         set_entries(std::move(entries));
-        // Save to atomic index cache
         cache_.save_atomic(all_entries_, current_scan_path_);
         if (on_complete) {
             on_complete(true);

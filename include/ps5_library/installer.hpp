@@ -48,12 +48,40 @@ enum class InstallErrorCode {
 };
 
 const char* to_string(InstallErrorCode code);
+const char* install_error_name(InstallErrorCode code);
 InstallErrorCode install_error_code_from_string(const std::string& str);
 
 /**
  * Returns user-actionable recovery guidance for a given install error.
  */
 std::string get_recovery_guidance(InstallErrorCode code, const std::string& extra_details = "");
+
+/**
+ * Individual preflight check item (Readability, Metadata, Available Storage).
+ */
+struct PreflightCheckItem {
+    std::string name;              // e.g. "File Readability", "Package Metadata", "Available Storage"
+    bool passed{false};
+    std::string details;           // e.g. "Readable (45.2 GB, regular file)"
+    std::string failure_reason;    // e.g. "Cannot open package for reading"
+    std::string remediation;       // Actionable recovery guidance
+};
+
+/**
+ * Per-check preflight summary structure.
+ */
+struct PreflightCheckSummary {
+    bool all_passed{true};
+    PreflightCheckItem readability;
+    PreflightCheckItem metadata;
+    PreflightCheckItem storage;
+
+    std::vector<PreflightCheckItem> checks() const {
+        return {readability, metadata, storage};
+    }
+
+    std::string formatted_summary() const;
+};
 
 /**
  * Result of package preflight validation step before dispatch.
@@ -68,6 +96,7 @@ struct PreflightResult {
     uint64_t required_storage_bytes{0};
     std::string detected_format;
     std::string detected_title_id;
+    PreflightCheckSummary summary;
 };
 
 /**
@@ -145,36 +174,67 @@ struct BatchProgress {
 };
 
 /**
+ * Sorting fields and orders for install history.
+ */
+enum class HistorySortField {
+    Timestamp,
+    PackageName
+};
+
+enum class HistorySortOrder {
+    Descending,
+    Ascending
+};
+
+const char* to_string(HistorySortField field);
+const char* to_string(HistorySortOrder order);
+HistorySortField history_sort_field_from_string(const std::string& str);
+HistorySortOrder history_sort_order_from_string(const std::string& str);
+
+/**
+ * Filter options for install history queries.
+ */
+struct HistoryFilterOptions {
+    std::string query;                                           // Free-text query matching Title ID, filename, error, etc.
+    std::optional<InstallStatus> outcome_filter{std::nullopt};   // Filter by outcome (Completed, Failed, Interrupted, etc.)
+    std::string format_filter;                                   // Filter by package format (pkg, exfat, ffpkg, or empty for all)
+    std::string date_from;                                       // ISO date range start (e.g. "2026-10-01" or full timestamp)
+    std::string date_to;                                         // ISO date range end (e.g. "2026-10-12" or full timestamp)
+    HistorySortField sort_field{HistorySortField::Timestamp};
+    HistorySortOrder sort_order{HistorySortOrder::Descending};
+};
+
+/**
+ * Export install history to JSON string.
+ */
+std::string export_history_to_json(const std::vector<InstallTask>& tasks, int indent = 2);
+
+/**
+ * Export install history to RFC 4180 CSV string.
+ */
+std::string export_history_to_csv(const std::vector<InstallTask>& tasks);
+
+/**
+ * Export install history to a file on disk (as JSON or CSV).
+ */
+bool export_history_to_file(const std::string& filepath, const std::vector<InstallTask>& tasks, bool as_json = true);
+
+/**
  * Pluggable delegate for executing install/mount operations.
- * Allows host testing simulation and hardware/daemon execution.
  */
 class IInstallDelegate {
 public:
     virtual ~IInstallDelegate() = default;
 
-    /**
-     * Executes the install step for a given task.
-     * @param task The task describing the package.
-     * @param on_chunk Progress callback: returns false if cancellation was requested.
-     * @param out_code Output error code if installation fails.
-     * @param out_error Output error message if installation fails.
-     * @return true on success, false on failure or cancellation.
-     */
     virtual bool install_package(const InstallTask& task,
                                  std::function<bool(uint64_t written_bytes, uint64_t total_bytes)> on_chunk,
                                  InstallErrorCode& out_code,
                                  std::string& out_error) = 0;
 
-    /**
-     * Query runtime platform capability of this delegate.
-     */
     virtual bool is_platform_supported() const { return true; }
     virtual std::string platform_status_description() const { return "Ready"; }
 };
 
-/**
- * Local file-based install delegate (validates package file and simulates or copies).
- */
 class LocalInstallDelegate : public IInstallDelegate {
 public:
     explicit LocalInstallDelegate(std::string target_base_directory = "/user/app");
@@ -190,12 +250,9 @@ public:
 
 private:
     std::string target_base_dir_;
-    uint64_t simulated_bytes_per_sec_{100ULL * 1024ULL * 1024ULL}; // 100 MB/s default
+    uint64_t simulated_bytes_per_sec_{100ULL * 1024ULL * 1024ULL};
 };
 
-/**
- * PS5 Hardware / System-level package install delegate.
- */
 class Ps5InstallDelegate : public IInstallDelegate {
 public:
     struct SystemCapabilities {
@@ -231,9 +288,6 @@ private:
     bool resolve_symbols_and_init();
 };
 
-/**
- * Mock install delegate for controlled unit testing.
- */
 class MockInstallDelegate : public IInstallDelegate {
 public:
     struct ItemRule {
@@ -265,9 +319,6 @@ using TaskProgressCallback = std::function<void(const InstallTask& task, const B
 using TaskFinishedCallback = std::function<void(const InstallTask& task)>;
 using BatchFinishedCallback = std::function<void(const BatchProgress& batch)>;
 
-/**
- * Result of checking whether a package can be queued or retried without duplication.
- */
 struct QueueCheckResult {
     bool can_queue{true};
     bool is_duplicate{false};
@@ -276,43 +327,28 @@ struct QueueCheckResult {
     std::optional<InstallTask> existing_task;
 };
 
-/**
- * High-performance Install Pipeline with persistent job state, preflight validation,
- * retry actions preserving original errors, duplicate prevention, and searchable history.
- */
 class InstallPipeline {
 public:
     explicit InstallPipeline(std::shared_ptr<IInstallDelegate> delegate = nullptr,
                             std::string state_filepath = "");
     ~InstallPipeline();
 
-    // Non-copyable, movable
     InstallPipeline(const InstallPipeline&) = delete;
     InstallPipeline& operator=(const InstallPipeline&) = delete;
 
-    // Single item installation with duplicate protection
     std::string queue_item(const GameItem& item, const std::string& title_id);
-
-    // Retry a failed or interrupted task, preserving original failure details and preflight checking
     std::string retry_task(const std::string& task_id_or_path, std::string* out_error = nullptr);
-
-    // Preflight and duplicate check for a candidate item
     QueueCheckResult check_queue_preflight(const std::string& source_path, bool is_retry_intent = false) const;
 
-    // Batch "Install All DLCs" pipeline
     std::string install_all_dlcs(const GameEntry& entry);
-
-    // Queue custom list of items as a batch
     std::string queue_batch(const std::string& title_id,
                             const std::string& batch_title,
                             ItemKind target_kind,
                             const std::vector<GameItem>& items);
 
-    // Cancellation
     void cancel_active_task();
     void cancel_all();
 
-    // Status queries
     bool is_busy() const;
     std::optional<InstallTask> current_active_task() const;
     BatchProgress current_batch_progress() const;
@@ -324,9 +360,18 @@ public:
     InstallStatus get_item_status(const std::string& source_path) const;
     std::optional<InstallTask> get_task_by_path(const std::string& source_path) const;
 
-    // Searchable Install History
+    // Search and filtering
     std::vector<InstallTask> search_history(const std::string& query = "",
                                            std::optional<InstallStatus> status_filter = std::nullopt) const;
+    std::vector<InstallTask> filter_and_sort_history(const HistoryFilterOptions& options) const;
+
+    // Export history (JSON & CSV)
+    std::string export_history_to_json(int indent = 2) const;
+    std::string export_history_to_json(const std::vector<InstallTask>& tasks, int indent = 2) const;
+    std::string export_history_to_csv() const;
+    std::string export_history_to_csv(const std::vector<InstallTask>& tasks) const;
+    bool export_history_to_file(const std::string& filepath, bool as_json = true) const;
+    bool export_history_to_file(const std::string& filepath, const std::vector<InstallTask>& tasks, bool as_json = true) const;
 
     // Callbacks
     void set_progress_callback(TaskProgressCallback cb);
@@ -336,8 +381,6 @@ public:
     // Execution control
     void start_worker();
     void stop_worker();
-
-    // Step/tick execution (useful for deterministic tests or main-thread stepping)
     bool process_one_step();
 
     // Delegate access

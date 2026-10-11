@@ -6,8 +6,10 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <nlohmann/json.hpp>
 
 using namespace ps5_library;
+using nlohmann::json;
 
 namespace {
 
@@ -196,12 +198,10 @@ void test_package_preflight_checks() {
     bad_item.format = "pkg";
     bad_item.display_name = "Corrupted Game";
 
-    // When enable_preflight is active, queueing bad packages fails preflight checks immediately
     auto queue_check = pipeline.check_queue_preflight(bad_item.absolute_path, false);
     assert(!queue_check.can_queue);
     assert(!queue_check.reason.empty());
 
-    // When preflight is disabled at queue time but executed in pipeline, it safely fails before delegate
     pipeline.set_enable_preflight(false);
     std::string task_id = pipeline.queue_item(bad_item, "PPSA99999");
     assert(!task_id.empty());
@@ -242,16 +242,13 @@ void test_searchable_history_and_diagnostics() {
     item2.display_name = "Shadow of the Erdtree";
     std::string id2 = pipeline_ptr->queue_item(item2, "PPSA03614");
 
-    // Process Demon's Souls
     pipeline_ptr->process_one_step();
 
-    // Configure failure for Elden Ring DLC and process
     delegate->configure_failure("EldenRing_DLC.pkg",
                                InstallErrorCode::InsufficientSpace,
                                "Target storage partition full");
     pipeline_ptr->process_one_step();
 
-    // Search tests
     auto all_history = pipeline_ptr->search_history("");
     assert(all_history.size() == 2);
 
@@ -271,18 +268,15 @@ void test_searchable_history_and_diagnostics() {
     assert(completed_search.size() == 1);
     assert(completed_search[0].title_id == "PPSA01337");
 
-    // UiShell history view test
     UiShell shell;
     shell.set_installer(pipeline_ptr);
     shell.show_install_history();
     assert(shell.active_dialog() == DialogType::InstallHistory);
     assert(shell.selected_history_item().has_value());
 
-    // Navigate history items
     shell.history_select_next();
     assert(shell.selected_history_item().has_value());
 
-    // Search query in UiShell
     shell.set_history_search_query("Erdtree");
     auto selected = shell.selected_history_item();
     assert(selected.has_value());
@@ -291,11 +285,330 @@ void test_searchable_history_and_diagnostics() {
     std::cout << "PASS: test_searchable_history_and_diagnostics" << std::endl;
 }
 
+void test_history_csv_json_export() {
+    auto delegate = std::make_shared<MockInstallDelegate>();
+    InstallPipeline pipeline(delegate);
+
+    GameItem item1;
+    item1.kind = ItemKind::Game;
+    item1.filename = "Game_Alpha,Special.pkg";
+    item1.absolute_path = "/data/Game_Alpha,Special.pkg";
+    item1.format = "pkg";
+    item1.display_name = "Alpha \"Special\" Edition";
+    std::string id1 = pipeline.queue_item(item1, "PPSA10001");
+    pipeline.process_one_step();
+
+    GameItem item2;
+    item2.kind = ItemKind::Dlc;
+    item2.filename = "DLC_Beta.ffpkg";
+    item2.absolute_path = "/data/DLC_Beta.ffpkg";
+    item2.format = "ffpkg";
+    item2.display_name = "Beta Expansion";
+    std::string id2 = pipeline.queue_item(item2, "PPSA10002");
+    delegate->configure_failure("DLC_Beta.ffpkg",
+                               InstallErrorCode::InsufficientSpace,
+                               "Storage volume full,\nneed 50GB free");
+    pipeline.process_one_step();
+
+    // Retry item2
+    delegate->reset();
+    std::string id3 = pipeline.retry_task(id2);
+    pipeline.process_one_step();
+
+    auto history = pipeline.all_tasks();
+    assert(history.size() == 3);
+
+    // Test JSON export
+    std::string json_str = pipeline.export_history_to_json(history, 2);
+    assert(!json_str.empty());
+    json parsed = json::parse(json_str);
+    assert(parsed.is_array());
+    assert(parsed.size() == 3);
+
+    // Verify required fields in JSON
+    for (const auto& j : parsed) {
+        assert(j.contains("task_id"));
+        assert(j.contains("title_id"));
+        assert(j.contains("package_filename"));
+        assert(j.contains("display_name"));
+        assert(j.contains("source_path"));
+        assert(j.contains("format"));
+        assert(j.contains("kind"));
+        assert(j.contains("total_bytes"));
+        assert(j.contains("processed_bytes"));
+        assert(j.contains("status"));
+        assert(j.contains("error_code"));
+        assert(j.contains("error_message"));
+        assert(j.contains("recovery_guidance"));
+        assert(j.contains("retry_count"));
+        assert(j.contains("original_task_id"));
+        assert(j.contains("original_error_code"));
+        assert(j.contains("created_timestamp"));
+        assert(j.contains("completed_timestamp"));
+    }
+
+    // Verify retry provenance in JSON for task 3
+    assert(parsed[2]["task_id"] == id3);
+    assert(parsed[2]["retry_count"] == 1);
+    assert(parsed[2]["original_task_id"] == id2);
+    assert(parsed[2]["original_error_code"] == "InsufficientSpace");
+
+    // Test CSV export
+    std::string csv_str = pipeline.export_history_to_csv(history);
+    assert(!csv_str.empty());
+    assert(csv_str.find("task_id,title_id,package_filename,display_name") != std::string::npos);
+    assert(csv_str.find("\"Alpha \"\"Special\"\" Edition\"") != std::string::npos);
+    assert(csv_str.find("\"Game_Alpha,Special.pkg\"") != std::string::npos);
+    assert(csv_str.find("PPSA10001") != std::string::npos);
+    assert(csv_str.find("PPSA10002") != std::string::npos);
+    assert(csv_str.find("InsufficientSpace") != std::string::npos);
+    assert(csv_str.find("retry_count") != std::string::npos);
+
+    // Test file exports
+    const std::string json_file = "/tmp/test_export_history.json";
+    const std::string csv_file = "/tmp/test_export_history.csv";
+    std::filesystem::remove(json_file);
+    std::filesystem::remove(csv_file);
+
+    assert(pipeline.export_history_to_file(json_file, history, true));
+    assert(std::filesystem::exists(json_file));
+    assert(std::filesystem::file_size(json_file) > 100);
+
+    assert(pipeline.export_history_to_file(csv_file, history, false));
+    assert(std::filesystem::exists(csv_file));
+    assert(std::filesystem::file_size(csv_file) > 100);
+
+    std::filesystem::remove(json_file);
+    std::filesystem::remove(csv_file);
+    std::cout << "PASS: test_history_csv_json_export" << std::endl;
+}
+
+void test_history_filters_and_sorting() {
+    auto delegate = std::make_shared<MockInstallDelegate>();
+    InstallPipeline pipeline(delegate);
+
+    GameItem item1;
+    item1.kind = ItemKind::Game;
+    item1.filename = "Zelda_Clone.pkg";
+    item1.absolute_path = "/data/Zelda_Clone.pkg";
+    item1.format = "pkg";
+    item1.display_name = "Zelda Clone";
+    std::string id1 = pipeline.queue_item(item1, "PPSA00001");
+    pipeline.process_one_step(); // Completed
+
+    GameItem item2;
+    item2.kind = ItemKind::Dlc;
+    item2.filename = "Apex_Addon.ffpkg";
+    item2.absolute_path = "/data/Apex_Addon.ffpkg";
+    item2.format = "ffpkg";
+    item2.display_name = "Apex Addon";
+    std::string id2 = pipeline.queue_item(item2, "PPSA00002");
+    delegate->configure_failure("Apex_Addon.ffpkg", InstallErrorCode::CorruptedHeader, "Bad header");
+    pipeline.process_one_step(); // Failed
+
+    GameItem item3;
+    item3.kind = ItemKind::Update;
+    item3.filename = "Cyber_Patch.exfat";
+    item3.absolute_path = "/data/Cyber_Patch.exfat";
+    item3.format = "exfat";
+    item3.display_name = "Cyber Patch";
+    std::string id3 = pipeline.queue_item(item3, "PPSA00003");
+    // Leave item3 Queued
+
+    // 1. Outcome Filter: Completed
+    HistoryFilterOptions opt1;
+    opt1.outcome_filter = InstallStatus::Completed;
+    auto res_completed = pipeline.filter_and_sort_history(opt1);
+    assert(res_completed.size() == 1);
+    assert(res_completed[0].task_id == id1);
+
+    // 2. Outcome Filter: Failed
+    HistoryFilterOptions opt2;
+    opt2.outcome_filter = InstallStatus::Failed;
+    auto res_failed = pipeline.filter_and_sort_history(opt2);
+    assert(res_failed.size() == 1);
+    assert(res_failed[0].task_id == id2);
+
+    // 3. Format Filter: ffpkg
+    HistoryFilterOptions opt3;
+    opt3.format_filter = "ffpkg";
+    auto res_ffpkg = pipeline.filter_and_sort_history(opt3);
+    assert(res_ffpkg.size() == 1);
+    assert(res_ffpkg[0].format == "ffpkg");
+
+    // 4. Format Filter: exfat
+    HistoryFilterOptions opt4;
+    opt4.format_filter = "exfat";
+    auto res_exfat = pipeline.filter_and_sort_history(opt4);
+    assert(res_exfat.size() == 1);
+    assert(res_exfat[0].format == "exfat");
+
+    // 5. Sort by PackageName Ascending: Apex -> Cyber -> Zelda
+    HistoryFilterOptions opt_sort_name_asc;
+    opt_sort_name_asc.sort_field = HistorySortField::PackageName;
+    opt_sort_name_asc.sort_order = HistorySortOrder::Ascending;
+    auto res_name_asc = pipeline.filter_and_sort_history(opt_sort_name_asc);
+    assert(res_name_asc.size() == 3);
+    assert(res_name_asc[0].package_filename == "Apex_Addon.ffpkg");
+    assert(res_name_asc[1].package_filename == "Cyber_Patch.exfat");
+    assert(res_name_asc[2].package_filename == "Zelda_Clone.pkg");
+
+    // 6. Sort by PackageName Descending: Zelda -> Cyber -> Apex
+    HistoryFilterOptions opt_sort_name_desc;
+    opt_sort_name_desc.sort_field = HistorySortField::PackageName;
+    opt_sort_name_desc.sort_order = HistorySortOrder::Descending;
+    auto res_name_desc = pipeline.filter_and_sort_history(opt_sort_name_desc);
+    assert(res_name_desc.size() == 3);
+    assert(res_name_desc[0].package_filename == "Zelda_Clone.pkg");
+    assert(res_name_desc[2].package_filename == "Apex_Addon.ffpkg");
+
+    // 7. Date range filter
+    std::string now_ts = res_name_asc[0].created_timestamp;
+    HistoryFilterOptions opt_date_match;
+    opt_date_match.date_from = now_ts.substr(0, 10); // YYYY-MM-DD
+    auto res_date_match = pipeline.filter_and_sort_history(opt_date_match);
+    assert(res_date_match.size() == 3);
+
+    HistoryFilterOptions opt_date_nomatch;
+    opt_date_nomatch.date_from = "2099-01-01T00:00:00Z";
+    auto res_date_nomatch = pipeline.filter_and_sort_history(opt_date_nomatch);
+    assert(res_date_nomatch.empty());
+
+    std::cout << "PASS: test_history_filters_and_sorting" << std::endl;
+}
+
+void test_per_check_preflight_summary_details() {
+    const std::string tmp_dir = "/tmp/ps5_preflight_summary_test";
+    std::filesystem::create_directories(tmp_dir);
+
+    // 1. Missing file: readability check fails
+    std::string missing = tmp_dir + "/does_not_exist.pkg";
+    PreflightResult res1 = run_package_preflight(missing, tmp_dir);
+    assert(!res1.passed);
+    assert(!res1.summary.readability.passed);
+    assert(!res1.summary.all_passed);
+    std::string summary_str1 = res1.summary.formatted_summary();
+    assert(summary_str1.find("[FAIL] File Readability:") != std::string::npos);
+
+    // 2. Corrupt header file: readability passes, metadata fails
+    std::string corrupt = tmp_dir + "/corrupt.pkg";
+    create_dummy_file(corrupt, "BAD_DATA_NOT_A_VALID_PKG");
+    PreflightResult res2 = run_package_preflight(corrupt, tmp_dir);
+    assert(!res2.passed);
+    assert(res2.summary.readability.passed);
+    assert(!res2.summary.metadata.passed);
+    std::string summary_str2 = res2.summary.formatted_summary();
+    assert(summary_str2.find("[PASS] File Readability:") != std::string::npos);
+    assert(summary_str2.find("[FAIL] Package Metadata:") != std::string::npos);
+
+    // 3. Valid PKG with valid header: all checks pass
+    std::string valid = tmp_dir + "/valid_game.pkg";
+    std::string content = "\x7FPKG\x00\x00\x00\x01";
+    content.resize(4096, 0);
+    create_dummy_file(valid, content);
+    PreflightResult res3 = run_package_preflight(valid, tmp_dir);
+    assert(res3.passed);
+    assert(res3.summary.readability.passed);
+    assert(res3.summary.metadata.passed);
+    assert(res3.summary.storage.passed);
+    assert(res3.summary.all_passed);
+    std::string summary_str3 = res3.summary.formatted_summary();
+    assert(summary_str3.find("[PASS] File Readability:") != std::string::npos);
+    assert(summary_str3.find("[PASS] Package Metadata:") != std::string::npos);
+    assert(summary_str3.find("[PASS] Available Storage:") != std::string::npos);
+
+    // 4. Test UiShell show_preflight_summary dialog
+    UiShell shell;
+    GameItem item;
+    item.filename = "valid_game.pkg";
+    item.absolute_path = valid;
+    item.format = "pkg";
+    item.display_name = "Valid Test Game";
+    item.size_bytes = 4096;
+    item.kind = ItemKind::Game;
+
+    shell.show_preflight_summary(item, "PPSA77777");
+    assert(shell.active_dialog() == DialogType::PreflightSummary);
+    assert(shell.dialog_model().title.find("valid_game.pkg") != std::string::npos);
+    assert(shell.dialog_model().secondary_text.find("[PASS] File Readability:") != std::string::npos);
+    assert(shell.dialog_model().secondary_text.find("[PASS] Available Storage:") != std::string::npos);
+    assert(!shell.dialog_model().options.empty());
+    assert(shell.dialog_model().options[0] == "Proceed with Install");
+
+    std::filesystem::remove_all(tmp_dir);
+    std::cout << "PASS: test_per_check_preflight_summary_details" << std::endl;
+}
+
+void test_retry_confirmation_dialog_workflow() {
+    const std::string tmp_dir = "/tmp/ps5_retry_confirm_test";
+    std::filesystem::create_directories(tmp_dir);
+
+    auto delegate = std::make_shared<MockInstallDelegate>();
+    auto pipeline = std::make_shared<InstallPipeline>(delegate);
+
+    std::string pkg_path = tmp_dir + "/RetryTest.pkg";
+    std::string content = "\x7FPKG\x00\x00\x00\x01";
+    content.resize(2048, 0);
+    create_dummy_file(pkg_path, content);
+
+    GameItem item;
+    item.filename = "RetryTest.pkg";
+    item.absolute_path = pkg_path;
+    item.format = "pkg";
+    item.display_name = "Retry Test Game";
+    item.size_bytes = 2048;
+
+    std::string task_id = pipeline->queue_item(item, "PPSA88888");
+    delegate->configure_failure("RetryTest.pkg",
+                               InstallErrorCode::InsufficientSpace,
+                               "Temporary partition locked");
+    pipeline->process_one_step();
+
+    auto failed_task = pipeline->get_task(task_id);
+    assert(failed_task.has_value());
+    assert(failed_task->status == InstallStatus::Failed);
+
+    UiShell shell;
+    shell.set_installer(pipeline);
+
+    // Open retry confirmation dialog
+    shell.show_retry_confirmation(*failed_task);
+    assert(shell.active_dialog() == DialogType::RetryConfirmation);
+    assert(shell.dialog_model().title.find("Retry Test Game") != std::string::npos);
+    assert(shell.dialog_model().secondary_text.find("Original Failure Details:") != std::string::npos);
+    assert(shell.dialog_model().secondary_text.find("InsufficientSpace") != std::string::npos);
+    assert(shell.dialog_model().secondary_text.find("Temporary partition locked") != std::string::npos);
+    // And verifies preflight summary was rerun:
+    assert(shell.dialog_model().secondary_text.find("[PASS] File Readability:") != std::string::npos);
+    assert(shell.dialog_model().options[0] == "Confirm Retry");
+
+    // Feed pad input: Cross on "Confirm Retry"
+    delegate->reset();
+    InputManager input;
+    input.feed_raw_buttons(pad_bits::kCross);
+    assert(shell.handle_pad_input(input));
+    assert(shell.active_dialog() == DialogType::None);
+
+    // Job should now be requeued in pipeline!
+    assert(pipeline->queued_tasks().size() == 1);
+    auto retried_task = pipeline->queued_tasks()[0];
+    assert(retried_task.retry_count == 1);
+    assert(retried_task.original_task_id == task_id);
+    assert(retried_task.original_error_code == InstallErrorCode::InsufficientSpace);
+
+    std::filesystem::remove_all(tmp_dir);
+    std::cout << "PASS: test_retry_confirmation_dialog_workflow" << std::endl;
+}
+
 int main() {
     test_duplicate_preflight_and_blocking();
     test_retry_provenance_and_preservation();
     test_package_preflight_checks();
     test_searchable_history_and_diagnostics();
-    std::cout << "\nALL 4 NEW TEST SUITES PASSED PERFECTLY!" << std::endl;
+    test_history_csv_json_export();
+    test_history_filters_and_sorting();
+    test_per_check_preflight_summary_details();
+    test_retry_confirmation_dialog_workflow();
+    std::cout << "\nALL 8 TEST SUITES PASSED PERFECTLY!" << std::endl;
     return 0;
 }

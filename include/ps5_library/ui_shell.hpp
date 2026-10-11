@@ -24,7 +24,9 @@ enum class DialogType {
     SearchFilter,
     Notification,
     RecoveryGuidance,
-    InstallHistory
+    InstallHistory,
+    RetryConfirmation,
+    PreflightSummary
 };
 
 struct DialogModel {
@@ -90,9 +92,12 @@ public:
     void show_shadowmount_lock();
     void show_recovery_guidance(const std::string& title, const std::string& message, const std::string& steps);
     void show_install_history();
+    void show_retry_confirmation(const InstallTask& task);
+    void show_preflight_summary(const GameItem& item, const std::string& title_id);
+    void show_preflight_summary(const std::string& package_path, const std::string& title_id, const std::string& display_name = "");
     void dismiss_dialog();
 
-    // Install History navigation and searching
+    // Install History navigation, filtering, and sorting
     const std::vector<InstallTask>& history_items() const { return history_items_; }
     size_t history_selected_index() const { return history_selected_index_; }
     void history_select_next();
@@ -100,6 +105,25 @@ public:
     void set_history_search_query(const std::string& query);
     const std::string& history_search_query() const { return history_search_query_; }
     std::optional<InstallTask> selected_history_item() const;
+
+    const HistoryFilterOptions& history_filter_options() const { return history_filter_options_; }
+    void set_history_filter_options(const HistoryFilterOptions& options);
+    void set_history_outcome_filter(std::optional<InstallStatus> outcome);
+    void set_history_format_filter(const std::string& format);
+    void set_history_date_range(const std::string& from, const std::string& to);
+    void set_history_sort(HistorySortField field, HistorySortOrder order);
+    void cycle_history_outcome_filter();
+    void cycle_history_format_filter();
+    void cycle_history_sort();
+
+    // History export
+    std::string export_history_json(int indent = 2) const;
+    std::string export_history_csv() const;
+    bool export_history_to_file(const std::string& filepath, bool as_json = true) const;
+
+    // Preflight summary preference before dispatch
+    bool preflight_summary_before_dispatch() const { return preflight_summary_before_dispatch_; }
+    void set_preflight_summary_before_dispatch(bool enable) { preflight_summary_before_dispatch_ = enable; }
 
     // Input processing
     bool handle_pad_input(const InputManager& input);
@@ -143,6 +167,8 @@ private:
     std::string history_search_query_;
     size_t history_selected_index_{0};
     std::vector<InstallTask> history_items_;
+    HistoryFilterOptions history_filter_options_;
+    bool preflight_summary_before_dispatch_{false};
     void update_history_view();
 
     ViewLayoutEngine layout_engine_;

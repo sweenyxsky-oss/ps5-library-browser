@@ -1,5 +1,7 @@
 #include "ps5_library/ui_shell.hpp"
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 
 #define TEST_ASSERT(cond) do { if (!(cond)) { std::cerr << "Assertion failed: " #cond << " at " << __FILE__ << ":" << __LINE__ << std::endl; std::exit(1); } } while (0)
@@ -83,7 +85,6 @@ void test_search_and_filters() {
     TEST_ASSERT(prompts[0].glyph == ButtonGlyph::Triangle);
 }
 
-
 static void test_install_history_dialog() {
     auto delegate = std::make_shared<MockInstallDelegate>();
     auto pipeline = std::make_shared<InstallPipeline>(delegate);
@@ -120,6 +121,145 @@ static void test_install_history_dialog() {
     TEST_ASSERT(shell.active_dialog() == DialogType::None);
 }
 
+static void test_history_filters_and_export_controls() {
+    auto delegate = std::make_shared<MockInstallDelegate>();
+    auto pipeline = std::make_shared<InstallPipeline>(delegate);
+    UiShell shell;
+    shell.set_installer(pipeline);
+
+    GameItem item1;
+    item1.filename = "Alpha.pkg";
+    item1.display_name = "Alpha Game";
+    item1.format = "pkg";
+    std::string id1 = pipeline->queue_item(item1, "PPSA11111");
+    pipeline->process_one_step(); // Completed
+
+    GameItem item2;
+    item2.filename = "Beta.ffpkg";
+    item2.display_name = "Beta DLC";
+    item2.format = "ffpkg";
+    std::string id2 = pipeline->queue_item(item2, "PPSA22222");
+    delegate->configure_failure("Beta.ffpkg", InstallErrorCode::CorruptedHeader, "Corrupted header");
+    pipeline->process_one_step(); // Failed
+
+    shell.show_install_history();
+    TEST_ASSERT(shell.active_dialog() == DialogType::InstallHistory);
+    TEST_ASSERT(shell.history_items().size() == 2);
+
+    // Verify prompts include history filter and export controls
+    auto prompts = shell.get_contextual_prompts();
+    bool has_triangle = false;
+    bool has_square = false;
+    for (const auto& p : prompts) {
+        if (p.glyph == ButtonGlyph::Triangle) has_triangle = true;
+        if (p.glyph == ButtonGlyph::Square) has_square = true;
+    }
+    TEST_ASSERT(has_triangle);
+    TEST_ASSERT(has_square);
+
+    // Test cycling outcome filter (Triangle pad input)
+    InputManager input;
+    input.feed_raw_buttons(pad_bits::kTriangle);
+    TEST_ASSERT(shell.handle_pad_input(input));
+    // Filtered by first outcome
+    TEST_ASSERT(shell.history_filter_options().outcome_filter.has_value());
+
+    // Cycle format filter (Square pad input)
+    input.feed_raw_buttons(0);
+    input.feed_raw_buttons(pad_bits::kSquare);
+    TEST_ASSERT(shell.handle_pad_input(input));
+    TEST_ASSERT(!shell.history_filter_options().format_filter.empty());
+
+    // Reset filters
+    HistoryFilterOptions reset_opts;
+    shell.set_history_filter_options(reset_opts);
+    TEST_ASSERT(shell.history_items().size() == 2);
+
+    // Test cycle sort (R1 pad input)
+    input.feed_raw_buttons(0);
+    input.feed_raw_buttons(pad_bits::kR1);
+    TEST_ASSERT(shell.handle_pad_input(input));
+
+    // Test history exports to files
+    const std::string json_export = "/tmp/ui_shell_history.json";
+    const std::string csv_export = "/tmp/ui_shell_history.csv";
+    std::filesystem::remove(json_export);
+    std::filesystem::remove(csv_export);
+
+    TEST_ASSERT(shell.export_history_to_file(json_export, true));
+    TEST_ASSERT(std::filesystem::exists(json_export));
+
+    TEST_ASSERT(shell.export_history_to_file(csv_export, false));
+    TEST_ASSERT(std::filesystem::exists(csv_export));
+
+    std::filesystem::remove(json_export);
+    std::filesystem::remove(csv_export);
+}
+
+static void test_retry_confirmation_modal_and_preflight_summary() {
+    auto delegate = std::make_shared<MockInstallDelegate>();
+    auto pipeline = std::make_shared<InstallPipeline>(delegate);
+    UiShell shell;
+    shell.set_installer(pipeline);
+
+    const std::string tmp_pkg = "/tmp/ui_shell_retry_test.pkg";
+    {
+        std::ofstream ofs(tmp_pkg, std::ios::binary);
+        std::string magic = "\x7FPKG\x00\x00\x00\x01";
+        magic.resize(1024, 0);
+        ofs.write(magic.data(), magic.size());
+    }
+
+    GameItem item;
+    item.filename = "ui_shell_retry_test.pkg";
+    item.absolute_path = tmp_pkg;
+    item.display_name = "Retry Test";
+    item.format = "pkg";
+    item.size_bytes = 1024;
+
+    std::string id = pipeline->queue_item(item, "PPSA99999");
+    delegate->configure_failure("ui_shell_retry_test.pkg", InstallErrorCode::InsufficientSpace, "Disk full error");
+    pipeline->process_one_step(); // Failed
+
+    // Open history dialog
+    shell.show_install_history();
+    TEST_ASSERT(shell.active_dialog() == DialogType::InstallHistory);
+
+    // Press Cross (Confirm) on failed item to trigger retry confirmation dialog
+    InputManager input;
+    input.feed_raw_buttons(pad_bits::kCross);
+    TEST_ASSERT(shell.handle_pad_input(input));
+    TEST_ASSERT(shell.active_dialog() == DialogType::RetryConfirmation);
+    TEST_ASSERT(shell.dialog_model().title.find("Retry Test") != std::string::npos);
+    TEST_ASSERT(shell.dialog_model().secondary_text.find("Disk full error") != std::string::npos);
+    TEST_ASSERT(shell.dialog_model().secondary_text.find("[PASS] File Readability:") != std::string::npos);
+
+    // Confirm retry via Cross
+    delegate->reset();
+    input.feed_raw_buttons(0);
+    input.feed_raw_buttons(pad_bits::kCross);
+    TEST_ASSERT(shell.handle_pad_input(input));
+    TEST_ASSERT(shell.active_dialog() == DialogType::None);
+
+    // Check pipeline has retried item
+    TEST_ASSERT(pipeline->queued_tasks().size() == 1);
+    TEST_ASSERT(pipeline->queued_tasks()[0].retry_count == 1);
+    TEST_ASSERT(pipeline->queued_tasks()[0].original_task_id == id);
+
+    // Test show_preflight_summary directly
+    shell.show_preflight_summary(item, "PPSA99999");
+    TEST_ASSERT(shell.active_dialog() == DialogType::PreflightSummary);
+    TEST_ASSERT(shell.dialog_model().secondary_text.find("[PASS] File Readability:") != std::string::npos);
+
+    // Confirm preflight install
+    input.feed_raw_buttons(0);
+    input.feed_raw_buttons(pad_bits::kCross);
+    TEST_ASSERT(shell.handle_pad_input(input));
+    TEST_ASSERT(shell.active_dialog() == DialogType::None);
+
+    std::filesystem::remove(tmp_pkg);
+}
+
 int main() {
     std::cout << "[TEST] UI mode/lock" << std::endl;
     test_modes_and_lock();
@@ -129,6 +269,10 @@ int main() {
     test_search_and_filters();
     std::cout << "[TEST] install history dialog" << std::endl;
     test_install_history_dialog();
+    std::cout << "[TEST] history filters and export controls" << std::endl;
+    test_history_filters_and_export_controls();
+    std::cout << "[TEST] retry confirmation modal and preflight summary" << std::endl;
+    test_retry_confirmation_modal_and_preflight_summary();
     std::cout << "All UI shell tests passed." << std::endl;
     return 0;
 }
