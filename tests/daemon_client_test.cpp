@@ -1,7 +1,16 @@
 #include "ps5_library/daemon_client.hpp"
 
 #include <iostream>
-#include <cassert>
+#include <cstdlib>
+#include <iostream>
+
+#define TEST_ASSERT(cond) \
+    do { \
+        if (!(cond)) { \
+            std::cerr << "Assertion failed: " #cond " at " << __FILE__ << ":" << __LINE__ << std::endl; \
+            std::exit(1); \
+        } \
+    } while (0)
 #include <thread>
 #include <atomic>
 #include <sys/socket.h>
@@ -29,7 +38,7 @@ public:
 
     uint16_t start() {
         server_fd_ = socket(AF_INET, SOCK_STREAM, 0);
-        assert(server_fd_ >= 0);
+        TEST_ASSERT(server_fd_ >= 0);
 
         int opt = 1;
         setsockopt(server_fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
@@ -40,7 +49,7 @@ public:
         addr.sin_port = 0; // Kernel picks free ephemeral port
 
         int bind_res = bind(server_fd_, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr));
-        assert(bind_res == 0);
+        TEST_ASSERT(bind_res == 0);
         (void)bind_res;
 
         socklen_t len = sizeof(addr);
@@ -119,21 +128,21 @@ void test_initial_locked_state() {
     std::cout << "[TEST] Running test_initial_locked_state..." << std::endl;
     DaemonLock lock;
 
-    assert(!lock.is_unlocked());
-    assert(lock.state() == LockState::Locked);
-    assert(lock.lock_message() == "ShadowMount Plus is required to unlock these features");
+    TEST_ASSERT(!lock.is_unlocked());
+    TEST_ASSERT(lock.state() == LockState::Locked);
+    TEST_ASSERT(lock.lock_message() == "ShadowMount Plus is required to unlock these features");
 
     // Verify protected features are blocked
-    assert(!lock.is_feature_allowed("nfs_browser"));
-    assert(!lock.is_feature_allowed("nfs_mount"));
-    assert(!lock.is_feature_allowed("install_game"));
-    assert(!lock.is_feature_allowed("install_dlc"));
-    assert(!lock.is_feature_allowed("install_all_dlc"));
-    assert(!lock.is_feature_allowed("install_update"));
+    TEST_ASSERT(!lock.is_feature_allowed("nfs_browser"));
+    TEST_ASSERT(!lock.is_feature_allowed("nfs_mount"));
+    TEST_ASSERT(!lock.is_feature_allowed("install_game"));
+    TEST_ASSERT(!lock.is_feature_allowed("install_dlc"));
+    TEST_ASSERT(!lock.is_feature_allowed("install_all_dlc"));
+    TEST_ASSERT(!lock.is_feature_allowed("install_update"));
 
     // Verify non-protected features are allowed
-    assert(lock.is_feature_allowed("installed_games_view"));
-    assert(lock.is_feature_allowed("view_settings"));
+    TEST_ASSERT(lock.is_feature_allowed("installed_games_view"));
+    TEST_ASSERT(lock.is_feature_allowed("view_settings"));
     std::cout << "  -> PASSED" << std::endl;
 }
 
@@ -143,11 +152,11 @@ void test_probe_down_daemon() {
     DaemonLock lock("127.0.0.1", 54321);
 
     auto result = lock.probe(std::chrono::milliseconds(200));
-    assert(!result.success);
-    assert(result.new_state == LockState::Locked);
-    assert(!lock.is_unlocked());
-    assert(!result.info.reachable);
-    assert(!result.info.error_message.empty());
+    TEST_ASSERT(!result.success);
+    TEST_ASSERT(result.new_state == LockState::Locked);
+    TEST_ASSERT(!lock.is_unlocked());
+    TEST_ASSERT(!result.info.reachable);
+    TEST_ASSERT(!result.info.error_message.empty());
     std::cout << "  -> PASSED" << std::endl;
 }
 
@@ -157,7 +166,7 @@ void test_successful_daemon_unlock() {
     uint16_t port = server.start();
 
     DaemonLock lock("127.0.0.1", port);
-    assert(!lock.is_unlocked());
+    TEST_ASSERT(!lock.is_unlocked());
 
     std::atomic<int> callback_count{0};
     LockState last_old = LockState::Error;
@@ -171,30 +180,30 @@ void test_successful_daemon_unlock() {
     });
 
     auto result = lock.probe(std::chrono::milliseconds(1000));
-    assert(result.success);
-    assert(result.new_state == LockState::Unlocked);
-    assert(lock.is_unlocked());
-    assert(lock.state() == LockState::Unlocked);
+    TEST_ASSERT(result.success);
+    TEST_ASSERT(result.new_state == LockState::Unlocked);
+    TEST_ASSERT(lock.is_unlocked());
+    TEST_ASSERT(lock.state() == LockState::Unlocked);
 
     // Verify parsed data
-    assert(result.info.reachable);
-    assert(result.info.api_version == 1);
-    assert(result.info.shadowmount_version == "1.7.0");
-    assert(result.info.capabilities.size() == 3);
-    assert(result.info.capabilities[0] == "storage_space");
-    assert(result.info.capabilities[1] == "list_images");
-    assert(result.info.capabilities[2] == "nfs_mount");
+    TEST_ASSERT(result.info.reachable);
+    TEST_ASSERT(result.info.api_version == 1);
+    TEST_ASSERT(result.info.shadowmount_version == "1.7.0");
+    TEST_ASSERT(result.info.capabilities.size() == 3);
+    TEST_ASSERT(result.info.capabilities[0] == "storage_space");
+    TEST_ASSERT(result.info.capabilities[1] == "list_images");
+    TEST_ASSERT(result.info.capabilities[2] == "nfs_mount");
 
     // Verify callback fired
-    assert(callback_count == 1);
-    assert(last_old == LockState::Locked);
-    assert(last_new == LockState::Unlocked);
+    TEST_ASSERT(callback_count == 1);
+    TEST_ASSERT(last_old == LockState::Locked);
+    TEST_ASSERT(last_new == LockState::Unlocked);
 
     // Verify all protected features are now unlocked
-    assert(lock.is_feature_allowed("nfs_browser"));
-    assert(lock.is_feature_allowed("install_game"));
-    assert(lock.is_feature_allowed("install_dlc"));
-    assert(lock.is_feature_allowed("install_all_dlc"));
+    TEST_ASSERT(lock.is_feature_allowed("nfs_browser"));
+    TEST_ASSERT(lock.is_feature_allowed("install_game"));
+    TEST_ASSERT(lock.is_feature_allowed("install_dlc"));
+    TEST_ASSERT(lock.is_feature_allowed("install_all_dlc"));
 
     std::cout << "  -> PASSED" << std::endl;
 }
@@ -206,19 +215,19 @@ void test_daemon_disconnect_locks_features() {
 
     DaemonLock lock("127.0.0.1", port);
     auto res1 = lock.probe(std::chrono::milliseconds(1000));
-    assert(res1.success);
-    assert(lock.is_unlocked());
+    TEST_ASSERT(res1.success);
+    TEST_ASSERT(lock.is_unlocked());
 
     // Stop server to simulate crash or exit
     server.stop();
 
     // Probe again - should lock
     auto res2 = lock.probe(std::chrono::milliseconds(200));
-    assert(!res2.success);
-    assert(!lock.is_unlocked());
-    assert(lock.state() == LockState::Locked);
-    assert(!lock.is_feature_allowed("nfs_browser"));
-    assert(lock.lock_message() == "ShadowMount Plus is required to unlock these features");
+    TEST_ASSERT(!res2.success);
+    TEST_ASSERT(!lock.is_unlocked());
+    TEST_ASSERT(lock.state() == LockState::Locked);
+    TEST_ASSERT(!lock.is_feature_allowed("nfs_browser"));
+    TEST_ASSERT(lock.lock_message() == "ShadowMount Plus is required to unlock these features");
 
     std::cout << "  -> PASSED" << std::endl;
 }
@@ -229,7 +238,7 @@ void test_background_monitor() {
     uint16_t port = server.start();
 
     DaemonLock lock("127.0.0.1", port);
-    assert(!lock.is_unlocked());
+    TEST_ASSERT(!lock.is_unlocked());
 
     std::atomic<bool> unlocked_flag{false};
     lock.set_state_change_callback([&](LockState, LockState new_s, const DaemonInfo&) {
@@ -247,8 +256,8 @@ void test_background_monitor() {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    assert(unlocked_flag.load());
-    assert(lock.is_unlocked());
+    TEST_ASSERT(unlocked_flag.load());
+    TEST_ASSERT(lock.is_unlocked());
 
     // Stop monitor cleanly
     lock.stop_background_monitor();

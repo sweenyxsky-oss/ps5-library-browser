@@ -3,7 +3,16 @@
 #include "ps5_library/ui_shell.hpp"
 #include "ps5_library/input.hpp"
 
-#include <cassert>
+#include <cstdlib>
+#include <iostream>
+
+#define TEST_ASSERT(cond) \
+    do { \
+        if (!(cond)) { \
+            std::cerr << "Assertion failed: " #cond " at " << __FILE__ << ":" << __LINE__ << std::endl; \
+            std::exit(1); \
+        } \
+    } while (0)
 #include <iostream>
 #include <memory>
 
@@ -50,49 +59,49 @@ void test_inspector_outside_info_and_tabs() {
     GameInspector inspector(entry);
 
     // Outside header and info (shown outside the buttons)
-    assert(inspector.title() == "Marvel's Spider-Man 2");
-    assert(inspector.title_id() == "PPSA01234");
-    assert(inspector.base_format() == "pkg");
-    assert(!inspector.base_size_formatted().empty());
-    assert(inspector.dlc_count() == 3);
-    assert(inspector.update_count() == 1);
-    assert(inspector.has_base_game());
+    TEST_ASSERT(inspector.title() == "Marvel's Spider-Man 2");
+    TEST_ASSERT(inspector.title_id() == "PPSA01234");
+    TEST_ASSERT(inspector.base_format() == "pkg");
+    TEST_ASSERT(!inspector.base_size_formatted().empty());
+    TEST_ASSERT(inspector.dlc_count() == 3);
+    TEST_ASSERT(inspector.update_count() == 1);
+    TEST_ASSERT(inspector.has_base_game());
 
     std::string header_info = inspector.get_outside_header_info();
-    assert(header_info.find("pkg") != std::string::npos);
-    assert(header_info.find("Total:") != std::string::npos);
+    TEST_ASSERT(header_info.find("pkg") != std::string::npos);
+    TEST_ASSERT(header_info.find("Total:") != std::string::npos);
 
     // Tab labels
-    assert(inspector.get_game_tab_label() == "Game (1)");
-    assert(inspector.get_dlc_tab_label() == "DLC (3)");
-    assert(inspector.get_update_tab_label() == "Update (1)");
+    TEST_ASSERT(inspector.get_game_tab_label() == "Game (1)");
+    TEST_ASSERT(inspector.get_dlc_tab_label() == "DLC (3)");
+    TEST_ASSERT(inspector.get_update_tab_label() == "Update (1)");
 
     // Default tab is Game
-    assert(inspector.active_tab() == InspectorTab::Game);
-    assert(inspector.current_tab_items().size() == 1);
+    TEST_ASSERT(inspector.active_tab() == InspectorTab::Game);
+    TEST_ASSERT(inspector.current_tab_items().size() == 1);
     auto base_detail = inspector.selected_item();
-    assert(base_detail.has_value());
-    assert(base_detail->filename == "SpiderMan2.pkg");
-    assert(base_detail->extension == ".pkg");
-    assert(base_detail->highlighted_format == "[PKG]");
-    assert(base_detail->formatted_size.find("GB") != std::string::npos);
+    TEST_ASSERT(base_detail.has_value());
+    TEST_ASSERT(base_detail->filename == "SpiderMan2.pkg");
+    TEST_ASSERT(base_detail->extension == ".pkg");
+    TEST_ASSERT(base_detail->highlighted_format == "[PKG]");
+    TEST_ASSERT(base_detail->formatted_size.find("GB") != std::string::npos);
 
     // Switch to DLC tab
     inspector.set_tab(InspectorTab::Dlc);
-    assert(inspector.active_tab() == InspectorTab::Dlc);
-    assert(inspector.current_tab_items().size() == 3);
-    assert(inspector.can_install_all_dlcs());
+    TEST_ASSERT(inspector.active_tab() == InspectorTab::Dlc);
+    TEST_ASSERT(inspector.current_tab_items().size() == 3);
+    TEST_ASSERT(inspector.can_install_all_dlcs());
 
     // Highlighted formats for DLCs (.pkg, .ffpkg, .exfat)
-    assert(inspector.current_tab_items()[0].highlighted_format == "[PKG]");
-    assert(inspector.current_tab_items()[1].highlighted_format == "[FFPKG]");
-    assert(inspector.current_tab_items()[2].highlighted_format == "[EXFAT]");
+    TEST_ASSERT(inspector.current_tab_items()[0].highlighted_format == "[PKG]");
+    TEST_ASSERT(inspector.current_tab_items()[1].highlighted_format == "[FFPKG]");
+    TEST_ASSERT(inspector.current_tab_items()[2].highlighted_format == "[EXFAT]");
 
     // Switch to Update tab
     inspector.set_tab(InspectorTab::Update);
-    assert(inspector.active_tab() == InspectorTab::Update);
-    assert(inspector.current_tab_items().size() == 1);
-    assert(inspector.current_tab_items()[0].version == "01.002.000");
+    TEST_ASSERT(inspector.active_tab() == InspectorTab::Update);
+    TEST_ASSERT(inspector.current_tab_items().size() == 1);
+    TEST_ASSERT(inspector.current_tab_items()[0].version == "01.002.000");
 
     std::cout << "PASS: test_inspector_outside_info_and_tabs\n";
 }
@@ -105,22 +114,22 @@ void test_per_item_install_and_sync() {
 
     // Queue single DLC item
     std::string task_id = pipeline.queue_item(entry.dlcs[0], entry.title_id);
-    assert(!task_id.empty());
-    assert(pipeline.is_busy());
+    TEST_ASSERT(!task_id.empty());
+    TEST_ASSERT(pipeline.is_busy());
 
     // Sync inspector with pipeline
     inspector.set_tab(InspectorTab::Dlc);
     inspector.sync_with_pipeline(pipeline);
-    assert(inspector.current_tab_items()[0].install_status == InstallStatus::Queued);
-    assert(inspector.current_tab_items()[0].status_badge == "QUEUED");
+    TEST_ASSERT(inspector.current_tab_items()[0].install_status == InstallStatus::Queued);
+    TEST_ASSERT(inspector.current_tab_items()[0].status_badge == "QUEUED");
 
     // Execute step
     bool ok = pipeline.process_one_step();
-    assert(ok);
+    TEST_ASSERT(ok);
     (void)ok;
     inspector.sync_with_pipeline(pipeline);
-    assert(inspector.current_tab_items()[0].install_status == InstallStatus::Completed);
-    assert(inspector.current_tab_items()[0].status_badge == "INSTALLED");
+    TEST_ASSERT(inspector.current_tab_items()[0].install_status == InstallStatus::Completed);
+    TEST_ASSERT(inspector.current_tab_items()[0].status_badge == "INSTALLED");
 
     std::cout << "PASS: test_per_item_install_and_sync\n";
 }
@@ -141,43 +150,43 @@ void test_install_all_dlcs_pipeline_success() {
     });
 
     pipeline.set_task_finished_callback([&](const InstallTask& task) {
-        assert(task.status == InstallStatus::Completed);
+        TEST_ASSERT(task.status == InstallStatus::Completed);
         (void)task;
         task_finished_count++;
     });
 
     pipeline.set_batch_finished_callback([&](const BatchProgress& batch) {
-        assert(batch.is_completed);
-        assert(!batch.has_failures);
-        assert(batch.completed_items == 3);
+        TEST_ASSERT(batch.is_completed);
+        TEST_ASSERT(!batch.has_failures);
+        TEST_ASSERT(batch.completed_items == 3);
         (void)batch;
         batch_completed_event = true;
     });
 
     std::string batch_id = pipeline.install_all_dlcs(entry);
-    assert(!batch_id.empty());
+    TEST_ASSERT(!batch_id.empty());
 
     BatchProgress init_batch = pipeline.current_batch_progress();
-    assert(init_batch.is_running);
-    assert(init_batch.total_items == 3);
-    assert(init_batch.completed_items == 0);
+    TEST_ASSERT(init_batch.is_running);
+    TEST_ASSERT(init_batch.total_items == 3);
+    TEST_ASSERT(init_batch.completed_items == 0);
 
     // Process all 3 DLCs
     while (pipeline.is_busy()) {
         bool step_ok = pipeline.process_one_step();
-        assert(step_ok);
+        TEST_ASSERT(step_ok);
         (void)step_ok;
     }
 
     BatchProgress finished_batch = pipeline.current_batch_progress();
-    assert(finished_batch.is_completed);
-    assert(finished_batch.completed_items == 3);
-    assert(finished_batch.failed_items == 0);
-    assert(finished_batch.overall_progress_percent() == 100);
-    assert(task_finished_count == 3);
-    assert(batch_completed_event);
-    assert(progress_callbacks > 0);
-    assert(mock_delegate->installed_count() == 3);
+    TEST_ASSERT(finished_batch.is_completed);
+    TEST_ASSERT(finished_batch.completed_items == 3);
+    TEST_ASSERT(finished_batch.failed_items == 0);
+    TEST_ASSERT(finished_batch.overall_progress_percent() == 100);
+    TEST_ASSERT(task_finished_count == 3);
+    TEST_ASSERT(batch_completed_event);
+    TEST_ASSERT(progress_callbacks > 0);
+    TEST_ASSERT(mock_delegate->installed_count() == 3);
 
     std::cout << "PASS: test_install_all_dlcs_pipeline_success\n";
 }
@@ -199,12 +208,12 @@ void test_install_all_dlcs_failure_handling() {
     }
 
     BatchProgress batch = pipeline.current_batch_progress();
-    assert(batch.is_completed);
-    assert(batch.has_failures);
-    assert(batch.completed_items == 2);
-    assert(batch.failed_items == 1);
-    assert(batch.failure_messages.size() == 1);
-    assert(batch.failure_messages[0].find("Not enough storage space") != std::string::npos);
+    TEST_ASSERT(batch.is_completed);
+    TEST_ASSERT(batch.has_failures);
+    TEST_ASSERT(batch.completed_items == 2);
+    TEST_ASSERT(batch.failed_items == 1);
+    TEST_ASSERT(batch.failure_messages.size() == 1);
+    TEST_ASSERT(batch.failure_messages[0].find("Not enough storage space") != std::string::npos);
 
     std::cout << "PASS: test_install_all_dlcs_failure_handling\n";
 }
@@ -218,15 +227,15 @@ void test_install_all_dlcs_cancellation() {
 
     // Step 1: 1st DLC completed
     pipeline.process_one_step();
-    assert(pipeline.current_batch_progress().completed_items == 1);
+    TEST_ASSERT(pipeline.current_batch_progress().completed_items == 1);
 
     // User cancels remaining tasks
     pipeline.cancel_all();
 
     BatchProgress batch = pipeline.current_batch_progress();
-    assert(batch.is_cancelled);
-    assert(batch.cancelled_items == 2);
-    assert(!pipeline.is_busy());
+    TEST_ASSERT(batch.is_cancelled);
+    TEST_ASSERT(batch.cancelled_items == 2);
+    TEST_ASSERT(!pipeline.is_busy());
 
     std::cout << "PASS: test_install_all_dlcs_cancellation\n";
 }
@@ -236,18 +245,18 @@ void test_ui_shell_integration_with_inspector() {
     GameEntry entry = create_test_game();
     shell.set_entries({entry});
 
-    assert(!shell.is_inspector_open());
-    assert(shell.focused_entry().has_value());
+    TEST_ASSERT(!shell.is_inspector_open());
+    TEST_ASSERT(shell.focused_entry().has_value());
 
     // Press Cross on focused game -> opens Inspector
     InputManager input;
     input.feed_raw_buttons(pad_bits::kCross);
     bool handled = shell.handle_pad_input(input);
-    assert(handled);
+    TEST_ASSERT(handled);
     (void)handled;
-    assert(shell.is_inspector_open());
-    assert(shell.inspector() != nullptr);
-    assert(shell.inspector()->title() == "Marvel's Spider-Man 2");
+    TEST_ASSERT(shell.is_inspector_open());
+    TEST_ASSERT(shell.inspector() != nullptr);
+    TEST_ASSERT(shell.inspector()->title() == "Marvel's Spider-Man 2");
 
     // Contextual prompts when inspector is open
     auto prompts = shell.get_contextual_prompts();
@@ -255,14 +264,14 @@ void test_ui_shell_integration_with_inspector() {
     for (const auto& p : prompts) {
         if (p.glyph == ButtonGlyph::Circle) has_back = true;
     }
-    assert(has_back);
+    TEST_ASSERT(has_back);
     (void)has_back;
 
     // Press Circle in inspector -> closes Inspector and returns to library
     input.feed_raw_buttons(pad_bits::kCircle);
     handled = shell.handle_pad_input(input);
-    assert(handled);
-    assert(!shell.is_inspector_open());
+    TEST_ASSERT(handled);
+    TEST_ASSERT(!shell.is_inspector_open());
 
     std::cout << "PASS: test_ui_shell_integration_with_inspector\n";
 }
