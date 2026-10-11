@@ -609,6 +609,242 @@ void test_retry_confirmation_dialog_workflow() {
     std::cout << "PASS: test_retry_confirmation_dialog_workflow" << std::endl;
 }
 
+
+void test_preflight_recheck_immediate_diff_and_reporting() {
+    std::string tmp_dir = "/tmp/test_preflight_diff_dir";
+    std::filesystem::remove_all(tmp_dir);
+    std::filesystem::create_directories(tmp_dir);
+
+    // 1. Unit diffing tests
+    PreflightCheckSummary base;
+    base.all_passed = true;
+    base.readability = {"File Readability", true, "Exists and readable (10.0 MB)", "", ""};
+    base.metadata = {"Package Metadata", true, "Recognized PKG package magic", "", ""};
+    base.storage = {"Available Storage", true, "Required: 510.0 MB, Available: 50.0 GB", "", ""};
+
+    PreflightCheckSummary deleted_state = base;
+    deleted_state.all_passed = false;
+    deleted_state.readability = {"File Readability", false, "", "File not found", "Verify path"};
+
+    auto diffs = diff_preflight_summaries(base, deleted_state);
+    TEST_ASSERT(diffs.size() == 1);
+    TEST_ASSERT(diffs[0].check_name == "File Readability");
+    TEST_ASSERT(diffs[0].status_changed);
+    TEST_ASSERT(diffs[0].previously_passed);
+    TEST_ASSERT(!diffs[0].currently_passed);
+
+    std::string formatted = format_preflight_diffs(diffs);
+    TEST_ASSERT(formatted.find("--- Preflight Status Changes Detected ---") != std::string::npos);
+    TEST_ASSERT(formatted.find("File Readability: Status changed from PASSED to FAILED") != std::string::npos);
+
+    // 2. Pipeline immediate re-check before dispatch detects deleted file
+    std::string pkg_path = tmp_dir + "/recheck_test.pkg";
+    std::string pkg_data = std::string("\x7FPKG", 4) + std::string(1024, 'A');
+    create_dummy_file(pkg_path, pkg_data);
+
+    auto delegate = std::make_shared<MockInstallDelegate>();
+    InstallPipeline pipeline(delegate);
+    pipeline.set_target_storage_dir(tmp_dir);
+    pipeline.set_enable_preflight(true);
+
+    GameItem item;
+    item.filename = "recheck_test.pkg";
+    item.absolute_path = pkg_path;
+    item.format = "pkg";
+    item.size_bytes = pkg_data.size();
+
+    const auto initial_preflight = run_package_preflight(pkg_path, tmp_dir);
+    TEST_ASSERT(initial_preflight.passed);
+
+    std::string task_id = pipeline.queue_item(item, "PPSA77777", initial_preflight.summary);
+    TEST_ASSERT(!task_id.empty());
+
+    // Delete the file before worker dispatch step
+    std::filesystem::remove(pkg_path);
+
+    // Run step - immediate preflight recheck occurs right before dispatch
+    pipeline.process_one_step();
+
+    auto failed_task = pipeline.get_task(task_id);
+    TEST_ASSERT(failed_task.has_value());
+    TEST_ASSERT(failed_task->status == InstallStatus::Failed);
+    TEST_ASSERT(!failed_task->preflight_changes.empty());
+    TEST_ASSERT(failed_task->error_message.find("Preflight check failed immediately before dispatch") != std::string::npos);
+    TEST_ASSERT(failed_task->error_message.find("File Readability") != std::string::npos);
+
+    // 3. UI Shell preflight summary immediate recheck diff display
+    create_dummy_file(pkg_path, pkg_data);
+    auto pipeline_ptr = std::make_shared<InstallPipeline>(delegate);
+    pipeline_ptr->set_target_storage_dir(tmp_dir);
+    pipeline_ptr->set_enable_preflight(true);
+    UiShell shell;
+    shell.set_installer(pipeline_ptr);
+
+    shell.show_preflight_summary(item, "PPSA77777");
+    TEST_ASSERT(shell.active_dialog() == DialogType::PreflightSummary);
+    TEST_ASSERT(shell.dialog_model().title.find("recheck_test.pkg") != std::string::npos);
+    TEST_ASSERT(shell.dialog_model().options[0] == "Proceed with Install");
+
+    // Remove file while summary dialog is open
+    std::filesystem::remove(pkg_path);
+
+    // User presses Cross to proceed with install -> immediate recheck diff triggered!
+    InputManager input;
+    input.feed_raw_buttons(pad_bits::kCross);
+    bool handled = shell.handle_pad_input(input);
+    TEST_ASSERT(handled);
+    // Dialog should now show diff changes before dispatch!
+    TEST_ASSERT(shell.active_dialog() == DialogType::PreflightSummary);
+    TEST_ASSERT(shell.dialog_model().title == "Preflight Results Changed Before Dispatch");
+    TEST_ASSERT(shell.dialog_model().secondary_text.find("File Readability") != std::string::npos);
+    TEST_ASSERT(shell.dialog_model().options[0] == "Dismiss");
+
+    std::filesystem::remove_all(tmp_dir);
+    std::cout << "PASS: test_preflight_recheck_immediate_diff_and_reporting" << std::endl;
+}
+
+void test_export_file_picker_and_configurable_filenames() {
+    std::string tmp_dir = "/tmp/test_export_picker_dir";
+    std::filesystem::remove_all(tmp_dir);
+    std::filesystem::create_directories(tmp_dir);
+
+    auto delegate = std::make_shared<MockInstallDelegate>();
+    auto pipeline = std::make_shared<InstallPipeline>(delegate);
+
+    GameItem item;
+    item.filename = "ExportSample.pkg";
+    item.absolute_path = "/data/ExportSample.pkg";
+    item.format = "pkg";
+    item.display_name = "Export Sample";
+    item.size_bytes = 2048;
+    pipeline->queue_item(item, "PPSA11111");
+
+    UiShell shell;
+    shell.set_installer(pipeline);
+
+    // 1. Open export file picker
+    shell.open_export_file_picker(true);
+    TEST_ASSERT(shell.active_dialog() == DialogType::ExportFilePicker);
+    TEST_ASSERT(shell.export_as_json() == true);
+    TEST_ASSERT(shell.dialog_model().title == "Export Install History");
+
+    // 2. Format toggle
+    shell.toggle_export_format();
+    TEST_ASSERT(shell.export_as_json() == false);
+    TEST_ASSERT(shell.export_full_path().find(".csv") != std::string::npos);
+
+    // 3. Preset cycling
+    std::string orig_dir = shell.export_directory();
+    shell.cycle_export_directory();
+    TEST_ASSERT(shell.export_directory() != orig_dir);
+
+    std::string orig_name = shell.export_filename();
+    shell.cycle_export_filename_preset();
+    TEST_ASSERT(shell.export_filename() != orig_name);
+
+    // 4. Custom directory and filename configuration
+    shell.set_export_directory(tmp_dir);
+    shell.set_export_filename("custom_audit_history");
+    shell.set_export_as_json(true);
+    std::string expected_path = tmp_dir + "/custom_audit_history.json";
+    TEST_ASSERT(shell.export_full_path() == expected_path);
+
+    // 5. Successful export execution with clear feedback
+    bool success = shell.execute_export();
+    TEST_ASSERT(success);
+    TEST_ASSERT(shell.active_dialog() == DialogType::Notification);
+    TEST_ASSERT(shell.dialog_model().title == "Export Succeeded");
+    TEST_ASSERT(shell.dialog_model().secondary_text.find("custom_audit_history.json") != std::string::npos);
+    TEST_ASSERT(std::filesystem::exists(expected_path));
+
+    // Verify valid JSON content written
+    std::ifstream in(expected_path);
+    json exported_json;
+    in >> exported_json;
+    TEST_ASSERT(exported_json.is_array());
+    TEST_ASSERT(exported_json.size() == 1);
+    TEST_ASSERT(exported_json[0]["title_id"] == "PPSA11111");
+
+    // 6. Failure feedback on unwritable/invalid destination
+    shell.set_export_directory("/dev/null/invalid_exports");
+    shell.set_export_filename("fail_test");
+    bool fail_res = shell.execute_export();
+    TEST_ASSERT(!fail_res);
+    TEST_ASSERT(shell.active_dialog() == DialogType::Notification);
+    TEST_ASSERT(shell.dialog_model().title == "Export Failed");
+    TEST_ASSERT(shell.dialog_model().secondary_text.find("Remediation:") != std::string::npos);
+
+    // 7. Controller navigation in ExportFilePicker
+    shell.open_export_file_picker(true);
+    InputManager input;
+
+    // Square toggles format
+    input.feed_raw_buttons(pad_bits::kSquare);
+    shell.handle_pad_input(input);
+    TEST_ASSERT(shell.export_as_json() == false);
+
+    // Circle cancels back to InstallHistory
+    input.feed_raw_buttons(pad_bits::kCircle);
+    shell.handle_pad_input(input);
+    TEST_ASSERT(shell.active_dialog() == DialogType::InstallHistory);
+
+    std::filesystem::remove_all(tmp_dir);
+    std::cout << "PASS: test_export_file_picker_and_configurable_filenames" << std::endl;
+}
+
+void test_saved_history_filters_and_cross_session_persistence() {
+    std::string tmp_dir = "/tmp/test_history_pref_dir";
+    std::filesystem::remove_all(tmp_dir);
+    std::filesystem::create_directories(tmp_dir);
+
+    std::string state_path = tmp_dir + "/install_state.json";
+
+    // 1. Session 1: Create UiShell (which owns the pipeline for state_path), add items, set custom filters and sort
+    {
+        UiShell shell(nullptr, tmp_dir + "/cache.json", state_path);
+        auto pipeline = shell.installer();
+        TEST_ASSERT(pipeline != nullptr);
+
+        GameItem g1; g1.filename = "Alpha.pkg"; g1.format = "pkg"; g1.size_bytes = 1000;
+        GameItem g2; g2.filename = "Beta.ffpkg"; g2.format = "ffpkg"; g2.size_bytes = 2000;
+        pipeline->queue_item(g1, "PPSA00001");
+        pipeline->queue_item(g2, "PPSA00002");
+
+        shell.show_install_history();
+
+        // Change filters and sort
+        shell.set_history_outcome_filter(InstallStatus::Queued);
+        shell.set_history_format_filter("pkg");
+        shell.set_history_sort(HistorySortField::PackageName, HistorySortOrder::Ascending);
+
+        // Close history dialog
+        shell.dismiss_dialog();
+        TEST_ASSERT(shell.active_dialog() == DialogType::None);
+
+        // Reopen history dialog - verify restored within session
+        shell.show_install_history();
+        TEST_ASSERT(shell.history_filter_options().outcome_filter == InstallStatus::Queued);
+        TEST_ASSERT(shell.history_filter_options().format_filter == "pkg");
+        TEST_ASSERT(shell.history_filter_options().sort_field == HistorySortField::PackageName);
+        TEST_ASSERT(shell.history_filter_options().sort_order == HistorySortOrder::Ascending);
+    }
+
+    // 2. Session 2: Fresh start reading from persistence state file
+    {
+        UiShell session2_shell(nullptr, tmp_dir + "/cache2.json", state_path);
+        session2_shell.show_install_history();
+
+        // Verify restored across sessions from disk state!
+        TEST_ASSERT(session2_shell.history_filter_options().outcome_filter == InstallStatus::Queued);
+        TEST_ASSERT(session2_shell.history_filter_options().format_filter == "pkg");
+        TEST_ASSERT(session2_shell.history_filter_options().sort_field == HistorySortField::PackageName);
+        TEST_ASSERT(session2_shell.history_filter_options().sort_order == HistorySortOrder::Ascending);
+    }
+
+    std::filesystem::remove_all(tmp_dir);
+    std::cout << "PASS: test_saved_history_filters_and_cross_session_persistence" << std::endl;
+}
+
 int main() {
     test_duplicate_preflight_and_blocking();
     test_retry_provenance_and_preservation();
@@ -618,6 +854,9 @@ int main() {
     test_history_filters_and_sorting();
     test_per_check_preflight_summary_details();
     test_retry_confirmation_dialog_workflow();
-    std::cout << "\nALL 8 TEST SUITES PASSED PERFECTLY!" << std::endl;
+    test_preflight_recheck_immediate_diff_and_reporting();
+    test_export_file_picker_and_configurable_filenames();
+    test_saved_history_filters_and_cross_session_persistence();
+    std::cout << "\nALL 11 TEST SUITES PASSED PERFECTLY!" << std::endl;
     return 0;
 }

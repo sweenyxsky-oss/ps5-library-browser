@@ -192,6 +192,95 @@ std::string PreflightCheckSummary::formatted_summary() const {
     return ss.str();
 }
 
+std::vector<PreflightCheckDiff> diff_preflight_summaries(const PreflightCheckSummary& previous,
+                                                         const PreflightCheckSummary& current) {
+    std::vector<PreflightCheckDiff> diffs;
+    auto compare_item = [&](const std::string& name, const PreflightCheckItem& prev, const PreflightCheckItem& curr) {
+        bool status_changed = (prev.passed != curr.passed);
+        std::string prev_val = prev.passed ? prev.details : prev.failure_reason;
+        std::string curr_val = curr.passed ? curr.details : curr.failure_reason;
+        bool value_changed = (prev_val != curr_val);
+
+        if (status_changed || value_changed) {
+            PreflightCheckDiff diff;
+            diff.check_name = name;
+            diff.status_changed = status_changed;
+            diff.previously_passed = prev.passed;
+            diff.currently_passed = curr.passed;
+            diff.previous_details = prev_val;
+            diff.current_details = curr_val;
+
+            if (status_changed) {
+                diff.description = name + ": Status changed from " + (prev.passed ? "PASSED" : "FAILED") +
+                                   " to " + (curr.passed ? "PASSED" : "FAILED") +
+                                   " (" + curr_val + ")";
+            } else {
+                diff.description = name + ": Value changed from [" + prev_val + "] to [" + curr_val + "]";
+            }
+            diffs.push_back(diff);
+        }
+    };
+
+    compare_item("File Readability", previous.readability, current.readability);
+    compare_item("Package Metadata", previous.metadata, current.metadata);
+    compare_item("Available Storage", previous.storage, current.storage);
+
+    return diffs;
+}
+
+std::string format_preflight_diffs(const std::vector<PreflightCheckDiff>& diffs) {
+    if (diffs.empty()) {
+        return "Preflight status unchanged since previous summary.";
+    }
+    std::ostringstream ss;
+    ss << "--- Preflight Status Changes Detected ---\n";
+    for (const auto& diff : diffs) {
+        ss << "* " << diff.description << "\n";
+    }
+    return ss.str();
+}
+
+std::string serialize_history_filter_options(const HistoryFilterOptions& options) {
+    json j;
+    j["query"] = options.query;
+    if (options.outcome_filter.has_value()) {
+        j["outcome_filter"] = to_string(*options.outcome_filter);
+    } else {
+        j["outcome_filter"] = nullptr;
+    }
+    j["format_filter"] = options.format_filter;
+    j["date_from"] = options.date_from;
+    j["date_to"] = options.date_to;
+    j["sort_field"] = static_cast<int>(options.sort_field);
+    j["sort_order"] = static_cast<int>(options.sort_order);
+    return j.dump();
+}
+
+HistoryFilterOptions deserialize_history_filter_options(const std::string& serialized) {
+    HistoryFilterOptions options;
+    if (serialized.empty()) return options;
+    try {
+        json j = json::parse(serialized);
+        options.query = j.value("query", "");
+        if (j.contains("outcome_filter") && !j["outcome_filter"].is_null()) {
+            std::string st = j["outcome_filter"].get<std::string>();
+            options.outcome_filter = install_status_from_string(st);
+        } else {
+            options.outcome_filter = std::nullopt;
+        }
+        options.format_filter = j.value("format_filter", "");
+        options.date_from = j.value("date_from", "");
+        options.date_to = j.value("date_to", "");
+        if (j.contains("sort_field")) {
+            options.sort_field = static_cast<HistorySortField>(j["sort_field"].get<int>());
+        }
+        if (j.contains("sort_order")) {
+            options.sort_order = static_cast<HistorySortOrder>(j["sort_order"].get<int>());
+        }
+    } catch (...) {}
+    return options;
+}
+
 namespace {
 std::string utc_timestamp_now() {
     const std::time_t now = std::time(nullptr);
@@ -706,11 +795,24 @@ InstallTask task_from_json(const json& j) {
     task.original_error_message = j.value("original_error_message", "");
     task.created_timestamp = j.value("created_timestamp", "");
     task.completed_timestamp = j.value("completed_timestamp", "");
+    if (j.contains("preflight_changes") && j["preflight_changes"].is_array()) {
+        for (const auto& d : j["preflight_changes"]) {
+            PreflightCheckDiff diff;
+            diff.check_name = d.value("check_name", "");
+            diff.status_changed = d.value("status_changed", false);
+            diff.previously_passed = d.value("previously_passed", false);
+            diff.currently_passed = d.value("currently_passed", false);
+            diff.previous_details = d.value("previous_details", "");
+            diff.current_details = d.value("current_details", "");
+            diff.description = d.value("description", "");
+            task.preflight_changes.push_back(diff);
+        }
+    }
     return task;
 }
 
 json task_to_json(const InstallTask& task) {
-    return json{
+    json res = json{
         {"task_id", task.task_id},
         {"title_id", task.title_id},
         {"package_filename", task.package_filename},
@@ -732,6 +834,22 @@ json task_to_json(const InstallTask& task) {
         {"created_timestamp", task.created_timestamp},
         {"completed_timestamp", task.completed_timestamp}
     };
+    if (!task.preflight_changes.empty()) {
+        json diffs_arr = json::array();
+        for (const auto& d : task.preflight_changes) {
+            diffs_arr.push_back({
+                {"check_name", d.check_name},
+                {"status_changed", d.status_changed},
+                {"previously_passed", d.previously_passed},
+                {"currently_passed", d.currently_passed},
+                {"previous_details", d.previous_details},
+                {"current_details", d.current_details},
+                {"description", d.description}
+            });
+        }
+        res["preflight_changes"] = diffs_arr;
+    }
+    return res;
 }
 } // namespace
 
@@ -811,7 +929,8 @@ std::string InstallPipeline::generate_task_id() {
     return "task_" + std::to_string(next_id_counter_++);
 }
 
-std::string InstallPipeline::queue_item(const GameItem& item, const std::string& title_id) {
+std::string InstallPipeline::queue_item(const GameItem& item, const std::string& title_id,
+                                        const std::optional<PreflightCheckSummary>& summary_snapshot) {
     const std::string source = item.absolute_path.empty() ? item.filename : item.absolute_path;
     const auto duplicate = check_queue_preflight(source, false);
     if (!duplicate.can_queue) return {};
@@ -828,9 +947,19 @@ std::string InstallPipeline::queue_item(const GameItem& item, const std::string&
     task.total_bytes = item.size_bytes;
     task.status = InstallStatus::Queued;
     task.created_timestamp = utc_timestamp_now();
+    task.has_preflight_snapshot = summary_snapshot.has_value();
+    if (summary_snapshot.has_value()) {
+        task.preflight_summary_snapshot = *summary_snapshot;
+    }
     task_queue_.push_back(task);
     save_state_locked();
     return task.task_id;
+}
+
+void InstallPipeline::set_saved_history_filter_options(const HistoryFilterOptions& options) {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    saved_history_filter_options_ = options;
+    save_state_locked();
 }
 
 QueueCheckResult InstallPipeline::check_queue_preflight(const std::string& source_path, bool is_retry_intent) const {
@@ -919,6 +1048,11 @@ std::string InstallPipeline::retry_task(const std::string& task_id_or_path, std:
     retry.completed_timestamp.clear();
     retry.start_time = {};
     retry.finish_time = {};
+    if (enable_preflight_) {
+        const auto fresh_p = run_package_preflight(retry.source_path, target_storage_dir_);
+        retry.has_preflight_snapshot = true;
+        retry.preflight_summary_snapshot = fresh_p.summary;
+    }
     task_queue_.push_back(retry);
     save_state_locked();
     return retry.task_id;
@@ -1170,6 +1304,7 @@ void InstallPipeline::save_state_locked() {
         if (active_task_) root["tasks"].push_back(task_to_json(*active_task_));
         for (const auto& task : task_queue_) root["tasks"].push_back(task_to_json(task));
         root["next_id"] = next_id_counter_;
+        root["saved_history_filter"] = json::parse(serialize_history_filter_options(saved_history_filter_options_));
 
         const std::string tmp = make_unique_temp_path(state_filepath_);
         std::filesystem::path target(state_filepath_);
@@ -1223,6 +1358,9 @@ bool InstallPipeline::load_and_restore_state() {
             }
         }
         next_id_counter_ = root.value("next_id", next_id_counter_);
+        if (root.contains("saved_history_filter")) {
+            saved_history_filter_options_ = deserialize_history_filter_options(root["saved_history_filter"].dump());
+        }
         return true;
     } catch (...) {
         return false;
@@ -1271,11 +1409,18 @@ bool InstallPipeline::process_one_step() {
 
     if (enable_preflight_) {
         const auto preflight = run_package_preflight(current.source_path, target_storage_dir_);
+        if (current.has_preflight_snapshot) {
+            current.preflight_changes = diff_preflight_summaries(current.preflight_summary_snapshot, preflight.summary);
+        }
         if (!preflight.passed) {
             std::lock_guard<std::mutex> lock(queue_mutex_);
             current.status = InstallStatus::Failed;
             current.error_code = preflight.error_code;
-            current.error_message = "Preflight check failed: " + preflight.error_message;
+            std::string err_msg = "Preflight check failed immediately before dispatch: " + preflight.error_message;
+            if (!current.preflight_changes.empty()) {
+                err_msg += "\n" + format_preflight_diffs(current.preflight_changes);
+            }
+            current.error_message = err_msg;
             current.recovery_guidance = preflight.recovery_guidance;
             current.finish_time = std::chrono::steady_clock::now();
             current.completed_timestamp = utc_timestamp_now();

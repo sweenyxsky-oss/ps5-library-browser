@@ -20,11 +20,17 @@ UiShell::UiShell(std::shared_ptr<DaemonLock> daemon_client,
         set_entries(std::move(cached_entries));
     }
     setup_pipeline_callbacks();
+    if (installer_) {
+        history_filter_options_ = installer_->saved_history_filter_options();
+    }
 }
 
 void UiShell::set_installer(std::shared_ptr<InstallPipeline> installer) {
     installer_ = std::move(installer);
     setup_pipeline_callbacks();
+    if (installer_) {
+        history_filter_options_ = installer_->saved_history_filter_options();
+    }
 }
 
 void UiShell::setup_pipeline_callbacks() {
@@ -165,6 +171,9 @@ void UiShell::show_install_history() {
     dialog_model_.type = DialogType::InstallHistory;
     dialog_model_.title = "Install History & Diagnostics";
     history_selected_index_ = 0;
+    if (installer_) {
+        history_filter_options_ = installer_->saved_history_filter_options();
+    }
     update_history_view();
 }
 
@@ -203,6 +212,12 @@ void UiShell::show_retry_confirmation(const InstallTask& task) {
     payload["task_id"] = task.task_id;
     payload["source_path"] = task.source_path;
     payload["passed"] = preflight.passed;
+    json sj;
+    sj["all_passed"] = preflight.summary.all_passed;
+    sj["readability"] = {{"passed", preflight.summary.readability.passed}, {"details", preflight.summary.readability.details}, {"failure_reason", preflight.summary.readability.failure_reason}, {"remediation", preflight.summary.readability.remediation}};
+    sj["metadata"] = {{"passed", preflight.summary.metadata.passed}, {"details", preflight.summary.metadata.details}, {"failure_reason", preflight.summary.metadata.failure_reason}, {"remediation", preflight.summary.metadata.remediation}};
+    sj["storage"] = {{"passed", preflight.summary.storage.passed}, {"details", preflight.summary.storage.details}, {"failure_reason", preflight.summary.storage.failure_reason}, {"remediation", preflight.summary.storage.remediation}};
+    payload["summary_snapshot"] = sj;
     dialog_model_.extra_payload = payload.dump();
 }
 
@@ -235,6 +250,12 @@ void UiShell::show_preflight_summary(const GameItem& item, const std::string& ti
     payload["version"] = item.version;
     payload["kind"] = to_string(item.kind);
     payload["passed"] = preflight.passed;
+    json sj;
+    sj["all_passed"] = preflight.summary.all_passed;
+    sj["readability"] = {{"passed", preflight.summary.readability.passed}, {"details", preflight.summary.readability.details}, {"failure_reason", preflight.summary.readability.failure_reason}, {"remediation", preflight.summary.readability.remediation}};
+    sj["metadata"] = {{"passed", preflight.summary.metadata.passed}, {"details", preflight.summary.metadata.details}, {"failure_reason", preflight.summary.metadata.failure_reason}, {"remediation", preflight.summary.metadata.remediation}};
+    sj["storage"] = {{"passed", preflight.summary.storage.passed}, {"details", preflight.summary.storage.details}, {"failure_reason", preflight.summary.storage.failure_reason}, {"remediation", preflight.summary.storage.remediation}};
+    payload["summary_snapshot"] = sj;
     dialog_model_.extra_payload = payload.dump();
 }
 
@@ -324,18 +345,27 @@ std::optional<InstallTask> UiShell::selected_history_item() const {
 void UiShell::set_history_filter_options(const HistoryFilterOptions& options) {
     history_filter_options_ = options;
     history_selected_index_ = 0;
+    if (installer_) {
+        installer_->set_saved_history_filter_options(history_filter_options_);
+    }
     update_history_view();
 }
 
 void UiShell::set_history_outcome_filter(std::optional<InstallStatus> outcome) {
     history_filter_options_.outcome_filter = outcome;
     history_selected_index_ = 0;
+    if (installer_) {
+        installer_->set_saved_history_filter_options(history_filter_options_);
+    }
     update_history_view();
 }
 
 void UiShell::set_history_format_filter(const std::string& format) {
     history_filter_options_.format_filter = format;
     history_selected_index_ = 0;
+    if (installer_) {
+        installer_->set_saved_history_filter_options(history_filter_options_);
+    }
     update_history_view();
 }
 
@@ -343,6 +373,9 @@ void UiShell::set_history_date_range(const std::string& from, const std::string&
     history_filter_options_.date_from = from;
     history_filter_options_.date_to = to;
     history_selected_index_ = 0;
+    if (installer_) {
+        installer_->set_saved_history_filter_options(history_filter_options_);
+    }
     update_history_view();
 }
 
@@ -350,6 +383,9 @@ void UiShell::set_history_sort(HistorySortField field, HistorySortOrder order) {
     history_filter_options_.sort_field = field;
     history_filter_options_.sort_order = order;
     history_selected_index_ = 0;
+    if (installer_) {
+        installer_->set_saved_history_filter_options(history_filter_options_);
+    }
     update_history_view();
 }
 
@@ -366,6 +402,9 @@ void UiShell::cycle_history_outcome_filter() {
         history_filter_options_.outcome_filter = std::nullopt;
     }
     history_selected_index_ = 0;
+    if (installer_) {
+        installer_->set_saved_history_filter_options(history_filter_options_);
+    }
     update_history_view();
 }
 
@@ -380,6 +419,9 @@ void UiShell::cycle_history_format_filter() {
         history_filter_options_.format_filter.clear();
     }
     history_selected_index_ = 0;
+    if (installer_) {
+        installer_->set_saved_history_filter_options(history_filter_options_);
+    }
     update_history_view();
 }
 
@@ -399,6 +441,9 @@ void UiShell::cycle_history_sort() {
         history_filter_options_.sort_order = HistorySortOrder::Descending;
     }
     history_selected_index_ = 0;
+    if (installer_) {
+        installer_->set_saved_history_filter_options(history_filter_options_);
+    }
     update_history_view();
 }
 
@@ -415,6 +460,136 @@ std::string UiShell::export_history_csv() const {
 bool UiShell::export_history_to_file(const std::string& filepath, bool as_json) const {
     if (!installer_) return false;
     return installer_->export_history_to_file(filepath, history_items_, as_json);
+}
+
+namespace {
+const std::vector<std::string> kPresetExportDirs = {
+    "/data/exports",
+    "/user/home",
+    "/usb0",
+    "/usb1",
+    "/hostapp",
+    "/tmp"
+};
+
+const std::vector<std::string> kPresetExportNames = {
+    "install_history_export",
+    "ps5_install_history",
+    "install_audit_log",
+    "install_history_filtered"
+};
+}
+
+std::string UiShell::export_full_path() const {
+    std::string ext = export_as_json_ ? ".json" : ".csv";
+    std::filesystem::path p(export_directory_);
+    std::string fn = export_filename_;
+    if (fn.size() >= ext.size() && fn.compare(fn.size() - ext.size(), ext.size(), ext) == 0) {
+        p /= fn;
+    } else {
+        p /= (fn + ext);
+    }
+    return p.string();
+}
+
+void UiShell::open_export_file_picker(bool as_json) {
+    export_as_json_ = as_json;
+    dialog_model_.type = DialogType::ExportFilePicker;
+    update_history_view();
+    update_export_picker_dialog();
+}
+
+void UiShell::set_export_directory(const std::string& dir) {
+    export_directory_ = dir;
+    if (dialog_model_.type == DialogType::ExportFilePicker) {
+        update_export_picker_dialog();
+    }
+}
+
+void UiShell::set_export_filename(const std::string& filename) {
+    export_filename_ = filename;
+    if (dialog_model_.type == DialogType::ExportFilePicker) {
+        update_export_picker_dialog();
+    }
+}
+
+void UiShell::set_export_as_json(bool as_json) {
+    export_as_json_ = as_json;
+    if (dialog_model_.type == DialogType::ExportFilePicker) {
+        update_export_picker_dialog();
+    }
+}
+
+void UiShell::cycle_export_directory() {
+    export_dir_index_ = (export_dir_index_ + 1) % kPresetExportDirs.size();
+    export_directory_ = kPresetExportDirs[export_dir_index_];
+    if (dialog_model_.type == DialogType::ExportFilePicker) {
+        update_export_picker_dialog();
+    }
+}
+
+void UiShell::cycle_export_filename_preset() {
+    export_name_index_ = (export_name_index_ + 1) % kPresetExportNames.size();
+    export_filename_ = kPresetExportNames[export_name_index_];
+    if (dialog_model_.type == DialogType::ExportFilePicker) {
+        update_export_picker_dialog();
+    }
+}
+
+void UiShell::toggle_export_format() {
+    export_as_json_ = !export_as_json_;
+    if (dialog_model_.type == DialogType::ExportFilePicker) {
+        update_export_picker_dialog();
+    }
+}
+
+void UiShell::update_export_picker_dialog() {
+    dialog_model_.title = "Export Install History";
+    dialog_model_.message = "Configure destination directory, filename, and format for history export:";
+    
+    std::string path = export_full_path();
+    std::ostringstream ss;
+    ss << "Format: " << (export_as_json_ ? "JSON (Structured Audit Log)" : "CSV (RFC 4180 Table)") << "\n";
+    ss << "Destination Path: " << path << "\n";
+    ss << "Records to Export: " << history_items_.size() << " items\n";
+    ss << "Controls: [X] Action | [Sqr] Format | [Tri] Directory | [L1/R1] Filename | [O] Back";
+    dialog_model_.secondary_text = ss.str();
+
+    dialog_model_.options = {
+        "Export Now",
+        export_as_json_ ? "Format: Switch to CSV" : "Format: Switch to JSON",
+        "Directory: " + export_directory_,
+        "Filename: " + export_filename_,
+        "Cancel"
+    };
+    if (dialog_model_.selected_option >= static_cast<int>(dialog_model_.options.size())) {
+        dialog_model_.selected_option = 0;
+    }
+}
+
+bool UiShell::execute_export() {
+    update_history_view();
+    const std::string path = export_full_path();
+    bool success = export_history_to_file(path, export_as_json_);
+
+    dialog_model_.type = DialogType::Notification;
+    dialog_model_.options = {"Dismiss"};
+    dialog_model_.selected_option = 0;
+
+    if (success) {
+        dialog_model_.title = "Export Succeeded";
+        dialog_model_.message = "Install history successfully exported!";
+        std::ostringstream ss;
+        ss << "File: " << path << "\n";
+        ss << "Format: " << (export_as_json_ ? "JSON" : "CSV") << "\n";
+        ss << "Records: " << history_items_.size() << " items written";
+        dialog_model_.secondary_text = ss.str();
+    } else {
+        dialog_model_.title = "Export Failed";
+        dialog_model_.message = "Unable to write export file to destination: " + path;
+        dialog_model_.secondary_text = "Remediation: Verify directory exists and has write permissions. Check available storage.";
+    }
+    return success;
 }
 
 void UiShell::dismiss_dialog() {
@@ -520,6 +695,10 @@ bool UiShell::handle_pad_input(const InputManager& input) {
                 dismiss_dialog();
                 return true;
             }
+            if (input.action_triggered(LogicalAction::SwitchLayout) || input.action_triggered(LogicalAction::OpenSearch)) {
+                open_export_file_picker(false);
+                return true;
+            }
             if (input.action_triggered(LogicalAction::NavDown)) {
                 history_select_next();
                 return true;
@@ -564,6 +743,60 @@ bool UiShell::handle_pad_input(const InputManager& input) {
                     try {
                         json payload = json::parse(dialog_model_.extra_payload);
                         std::string task_id = payload.value("task_id", "");
+                        std::string source_path = payload.value("source_path", "");
+                        std::string target_dir = installer_ ? installer_->target_storage_dir() : "/user/app";
+
+                        const auto fresh_preflight = run_package_preflight(source_path, target_dir);
+
+                        PreflightCheckSummary prev_summary;
+                        if (payload.contains("summary_snapshot")) {
+                            const auto& sj = payload["summary_snapshot"];
+                            prev_summary.all_passed = sj.value("all_passed", true);
+                            if (sj.contains("readability")) {
+                                prev_summary.readability.passed = sj["readability"].value("passed", false);
+                                prev_summary.readability.details = sj["readability"].value("details", "");
+                                prev_summary.readability.failure_reason = sj["readability"].value("failure_reason", "");
+                                prev_summary.readability.remediation = sj["readability"].value("remediation", "");
+                            }
+                            if (sj.contains("metadata")) {
+                                prev_summary.metadata.passed = sj["metadata"].value("passed", false);
+                                prev_summary.metadata.details = sj["metadata"].value("details", "");
+                                prev_summary.metadata.failure_reason = sj["metadata"].value("failure_reason", "");
+                                prev_summary.metadata.remediation = sj["metadata"].value("remediation", "");
+                            }
+                            if (sj.contains("storage")) {
+                                prev_summary.storage.passed = sj["storage"].value("passed", false);
+                                prev_summary.storage.details = sj["storage"].value("details", "");
+                                prev_summary.storage.failure_reason = sj["storage"].value("failure_reason", "");
+                                prev_summary.storage.remediation = sj["storage"].value("remediation", "");
+                            }
+                        }
+
+                        const auto diffs = diff_preflight_summaries(prev_summary, fresh_preflight.summary);
+                        if (!diffs.empty()) {
+                            dialog_model_.title = "Preflight Results Changed Before Retry";
+                            dialog_model_.message = fresh_preflight.passed
+                                ? "Preflight conditions changed since the initial summary. Review changes below:"
+                                : "Preflight check failed on immediate recheck before retry:";
+                            dialog_model_.secondary_text = format_preflight_diffs(diffs) + "\n\n" + fresh_preflight.summary.formatted_summary();
+
+                            if (fresh_preflight.passed) {
+                                dialog_model_.options = {"Proceed with Retry", "Cancel"};
+                            } else {
+                                dialog_model_.options = {"Dismiss"};
+                            }
+                            dialog_model_.selected_option = 0;
+
+                            json fresh_sj;
+                            fresh_sj["all_passed"] = fresh_preflight.summary.all_passed;
+                            fresh_sj["readability"] = {{"passed", fresh_preflight.summary.readability.passed}, {"details", fresh_preflight.summary.readability.details}, {"failure_reason", fresh_preflight.summary.readability.failure_reason}, {"remediation", fresh_preflight.summary.readability.remediation}};
+                            fresh_sj["metadata"] = {{"passed", fresh_preflight.summary.metadata.passed}, {"details", fresh_preflight.summary.metadata.details}, {"failure_reason", fresh_preflight.summary.metadata.failure_reason}, {"remediation", fresh_preflight.summary.metadata.remediation}};
+                            fresh_sj["storage"] = {{"passed", fresh_preflight.summary.storage.passed}, {"details", fresh_preflight.summary.storage.details}, {"failure_reason", fresh_preflight.summary.storage.failure_reason}, {"remediation", fresh_preflight.summary.storage.remediation}};
+                            payload["summary_snapshot"] = fresh_sj;
+                            dialog_model_.extra_payload = payload.dump();
+                            return true;
+                        }
+
                         if (installer_ && !task_id.empty()) {
                             installer_->retry_task(task_id);
                             update_history_view();
@@ -572,6 +805,22 @@ bool UiShell::handle_pad_input(const InputManager& input) {
                             }
                         }
                     } catch (...) {}
+                    dismiss_dialog();
+                    return true;
+                } else if (!dialog_model_.options.empty() && dialog_model_.options[dialog_model_.selected_option] == "Proceed with Retry") {
+                    try {
+                        json payload = json::parse(dialog_model_.extra_payload);
+                        std::string task_id = payload.value("task_id", "");
+                        if (installer_ && !task_id.empty()) {
+                            installer_->retry_task(task_id);
+                            update_history_view();
+                            if (is_inspector_open()) {
+                                inspector_->sync_with_pipeline(*installer_);
+                            }
+                        }
+                    } catch (...) {}
+                    dismiss_dialog();
+                    return true;
                 }
                 dismiss_dialog();
                 return true;
@@ -591,6 +840,61 @@ bool UiShell::handle_pad_input(const InputManager& input) {
                 if (!dialog_model_.options.empty() && dialog_model_.options[dialog_model_.selected_option] == "Proceed with Install") {
                     try {
                         json payload = json::parse(dialog_model_.extra_payload);
+                        std::string absolute_path = payload.value("absolute_path", "");
+                        std::string target_dir = installer_ ? installer_->target_storage_dir() : "/user/app";
+
+                        const auto fresh_preflight = run_package_preflight(absolute_path, target_dir);
+
+                        PreflightCheckSummary prev_summary;
+                        if (payload.contains("summary_snapshot")) {
+                            const auto& sj = payload["summary_snapshot"];
+                            prev_summary.all_passed = sj.value("all_passed", true);
+                            if (sj.contains("readability")) {
+                                prev_summary.readability.passed = sj["readability"].value("passed", false);
+                                prev_summary.readability.details = sj["readability"].value("details", "");
+                                prev_summary.readability.failure_reason = sj["readability"].value("failure_reason", "");
+                                prev_summary.readability.remediation = sj["readability"].value("remediation", "");
+                            }
+                            if (sj.contains("metadata")) {
+                                prev_summary.metadata.passed = sj["metadata"].value("passed", false);
+                                prev_summary.metadata.details = sj["metadata"].value("details", "");
+                                prev_summary.metadata.failure_reason = sj["metadata"].value("failure_reason", "");
+                                prev_summary.metadata.remediation = sj["metadata"].value("remediation", "");
+                            }
+                            if (sj.contains("storage")) {
+                                prev_summary.storage.passed = sj["storage"].value("passed", false);
+                                prev_summary.storage.details = sj["storage"].value("details", "");
+                                prev_summary.storage.failure_reason = sj["storage"].value("failure_reason", "");
+                                prev_summary.storage.remediation = sj["storage"].value("remediation", "");
+                            }
+                        }
+
+                        const auto diffs = diff_preflight_summaries(prev_summary, fresh_preflight.summary);
+                        if (!diffs.empty()) {
+                            dialog_model_.title = "Preflight Results Changed Before Dispatch";
+                            dialog_model_.message = fresh_preflight.passed
+                                ? "Preflight conditions changed since the initial summary. Review changes below:"
+                                : "Preflight check failed on immediate recheck before dispatch:";
+                            dialog_model_.secondary_text = format_preflight_diffs(diffs) + "\n\n" + fresh_preflight.summary.formatted_summary();
+
+                            if (fresh_preflight.passed) {
+                                dialog_model_.options = {"Proceed Anyway", "Cancel"};
+                            } else {
+                                dialog_model_.options = {"Dismiss"};
+                            }
+                            dialog_model_.selected_option = 0;
+
+                            payload["passed"] = fresh_preflight.passed;
+                            json fresh_sj;
+                            fresh_sj["all_passed"] = fresh_preflight.summary.all_passed;
+                            fresh_sj["readability"] = {{"passed", fresh_preflight.summary.readability.passed}, {"details", fresh_preflight.summary.readability.details}, {"failure_reason", fresh_preflight.summary.readability.failure_reason}, {"remediation", fresh_preflight.summary.readability.remediation}};
+                            fresh_sj["metadata"] = {{"passed", fresh_preflight.summary.metadata.passed}, {"details", fresh_preflight.summary.metadata.details}, {"failure_reason", fresh_preflight.summary.metadata.failure_reason}, {"remediation", fresh_preflight.summary.metadata.remediation}};
+                            fresh_sj["storage"] = {{"passed", fresh_preflight.summary.storage.passed}, {"details", fresh_preflight.summary.storage.details}, {"failure_reason", fresh_preflight.summary.storage.failure_reason}, {"remediation", fresh_preflight.summary.storage.remediation}};
+                            payload["summary_snapshot"] = fresh_sj;
+                            dialog_model_.extra_payload = payload.dump();
+                            return true;
+                        }
+
                         GameItem item;
                         item.filename = payload.value("filename", "");
                         item.absolute_path = payload.value("absolute_path", "");
@@ -603,14 +907,96 @@ bool UiShell::handle_pad_input(const InputManager& input) {
                         item.kind = parse_item_kind(payload.value("kind", "Unknown"));
                         std::string title_id = payload.value("title_id", "");
                         if (installer_) {
-                            installer_->queue_item(item, title_id);
+                            installer_->queue_item(item, title_id, fresh_preflight.summary);
                             if (is_inspector_open()) {
                                 inspector_->sync_with_pipeline(*installer_);
                             }
                         }
                     } catch (...) {}
+                    dismiss_dialog();
+                    return true;
+                } else if (!dialog_model_.options.empty() && dialog_model_.options[dialog_model_.selected_option] == "Proceed Anyway") {
+                    try {
+                        json payload = json::parse(dialog_model_.extra_payload);
+                        GameItem item;
+                        item.filename = payload.value("filename", "");
+                        item.absolute_path = payload.value("absolute_path", "");
+                        item.format = payload.value("format", "");
+                        item.display_name = payload.value("display_name", "");
+                        item.size_bytes = payload.value("size_bytes", uint64_t{0});
+                        item.size_known = item.size_bytes > 0;
+                        item.formatted_size = format_file_size(item.size_bytes);
+                        item.version = payload.value("version", "");
+                        item.kind = parse_item_kind(payload.value("kind", "Unknown"));
+                        std::string title_id = payload.value("title_id", "");
+                        if (installer_) {
+                            std::string target_dir = installer_->target_storage_dir();
+                            const auto immediate_p = run_package_preflight(item.absolute_path, target_dir);
+                            installer_->queue_item(item, title_id, immediate_p.summary);
+                            if (is_inspector_open()) {
+                                inspector_->sync_with_pipeline(*installer_);
+                            }
+                        }
+                    } catch (...) {}
+                    dismiss_dialog();
+                    return true;
                 }
                 dismiss_dialog();
+                return true;
+            }
+        } else if (dialog_model_.type == DialogType::ExportFilePicker) {
+            if (input.action_triggered(LogicalAction::Cancel)) {
+                show_install_history();
+                return true;
+            }
+            if (input.action_triggered(LogicalAction::NavUp)) {
+                if (!dialog_model_.options.empty()) {
+                    if (dialog_model_.selected_option > 0) {
+                        dialog_model_.selected_option--;
+                    } else {
+                        dialog_model_.selected_option = static_cast<int>(dialog_model_.options.size() - 1);
+                    }
+                }
+                return true;
+            }
+            if (input.action_triggered(LogicalAction::NavDown)) {
+                if (!dialog_model_.options.empty()) {
+                    dialog_model_.selected_option = (dialog_model_.selected_option + 1) % dialog_model_.options.size();
+                }
+                return true;
+            }
+            if (input.action_triggered(LogicalAction::Inspect)) {
+                toggle_export_format();
+                return true;
+            }
+            if (input.action_triggered(LogicalAction::ToggleMode)) {
+                cycle_export_directory();
+                return true;
+            }
+            if (input.action_triggered(LogicalAction::PrevFilter) || input.action_triggered(LogicalAction::NextFilter)) {
+                cycle_export_filename_preset();
+                return true;
+            }
+            if (input.action_triggered(LogicalAction::Confirm)) {
+                if (!dialog_model_.options.empty()) {
+                    const std::string& opt = dialog_model_.options[dialog_model_.selected_option];
+                    if (opt == "Export Now") {
+                        execute_export();
+                        return true;
+                    } else if (opt.rfind("Format:", 0) == 0) {
+                        toggle_export_format();
+                        return true;
+                    } else if (opt.rfind("Directory:", 0) == 0) {
+                        cycle_export_directory();
+                        return true;
+                    } else if (opt.rfind("Filename:", 0) == 0) {
+                        cycle_export_filename_preset();
+                        return true;
+                    } else if (opt == "Cancel") {
+                        show_install_history();
+                        return true;
+                    }
+                }
                 return true;
             }
         } else {
@@ -789,12 +1175,22 @@ std::vector<ButtonPrompt> UiShell::get_contextual_prompts() const {
         return prompts;
     }
 
+    if (dialog_model_.type == DialogType::ExportFilePicker) {
+        prompts.push_back({ButtonGlyph::Cross, "Select / Action", true, true});
+        prompts.push_back({ButtonGlyph::Square, "Toggle Format", true, false});
+        prompts.push_back({ButtonGlyph::Triangle, "Cycle Dir", true, false});
+        prompts.push_back({ButtonGlyph::L1, "Cycle Name", true, false});
+        prompts.push_back({ButtonGlyph::Circle, "Back", true, false});
+        return prompts;
+    }
+
     if (dialog_model_.type == DialogType::InstallHistory) {
         prompts.push_back({ButtonGlyph::DPadUpDown, "Select Job", true, false});
         prompts.push_back({ButtonGlyph::Cross, "Retry Selected", true, true});
         prompts.push_back({ButtonGlyph::Triangle, "Filter Status", true, false});
         prompts.push_back({ButtonGlyph::Square, "Filter Format", true, false});
         prompts.push_back({ButtonGlyph::L1, "Sort (L1/R1)", true, false});
+        prompts.push_back({ButtonGlyph::Touchpad, "Export File...", true, false});
         prompts.push_back({ButtonGlyph::Circle, "Close History", true, false});
         return prompts;
     }

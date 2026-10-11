@@ -26,7 +26,8 @@ enum class DialogType {
     RecoveryGuidance,
     InstallHistory,
     RetryConfirmation,
-    PreflightSummary
+    PreflightSummary,
+    ExportFilePicker
 };
 
 struct DialogModel {
@@ -121,6 +122,20 @@ public:
     std::string export_history_csv() const;
     bool export_history_to_file(const std::string& filepath, bool as_json = true) const;
 
+    // Export file picker and configurable filenames
+    void open_export_file_picker(bool as_json = true);
+    void set_export_directory(const std::string& dir);
+    void set_export_filename(const std::string& filename);
+    void set_export_as_json(bool as_json);
+    const std::string& export_directory() const { return export_directory_; }
+    const std::string& export_filename() const { return export_filename_; }
+    bool export_as_json() const { return export_as_json_; }
+    std::string export_full_path() const;
+    void cycle_export_directory();
+    void cycle_export_filename_preset();
+    void toggle_export_format();
+    bool execute_export();
+
     // Preflight summary preference before dispatch
     bool preflight_summary_before_dispatch() const { return preflight_summary_before_dispatch_; }
     void set_preflight_summary_before_dispatch(bool enable) { preflight_summary_before_dispatch_ = enable; }
@@ -170,6 +185,14 @@ private:
     HistoryFilterOptions history_filter_options_;
     bool preflight_summary_before_dispatch_{false};
     void update_history_view();
+
+    // Export configuration and picker state
+    std::string export_directory_{"/data/exports"};
+    std::string export_filename_{"install_history_export"};
+    bool export_as_json_{true};
+    size_t export_dir_index_{0};
+    size_t export_name_index_{0};
+    void update_export_picker_dialog();
 
     ViewLayoutEngine layout_engine_;
     ScannerEngine scanner_;

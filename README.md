@@ -131,6 +131,9 @@ ctest --test-dir build --output-on-failure
   - **Granular History Filtering & Multi-Key Sorting**: Multi-criteria filtering by install outcome (`Completed`, `Failed`, `Interrupted`, `Cancelled`, `Queued`, `InProgress`), package format (`pkg`, `exfat`, `ffpkg`, `folder`), and ISO 8601 date ranges; sortable ascending or descending by timestamp or package filename.
   - **Retry Confirmation Modal with Live Preflight Verification**: Interactive UI modal surfacing prior failure diagnostics and re-executing live preflight checks to ensure errors are resolved before requeueing.
   - **Per-Check Preflight Summary**: Clear per-check diagnostic breakdown across File Readability, Package Metadata/Header, and Available Storage with safety margins before dispatching to the installer.
+  - **Immediate Preflight Re-Check & Changed Results Diffing**: Automatically verifies package readability, format/metadata signatures, and storage capacity immediately before dispatch, detecting and reporting deviations from initial summary snapshots.
+  - **Export File Picker & Configurable Filenames**: Interactive modal for selecting destination directories and filenames for CSV/JSON diagnostic logs with real-time feedback and remediation on failure.
+  - **Cross-Session Filter & Sort Persistence**: Atomically preserves install history filter options (outcome, format, date ranges, query) and sort preferences across application restarts.
 - [ ] **Milestone 5: PS5 Payload Packaging & Hardware Integration**
 
 ---

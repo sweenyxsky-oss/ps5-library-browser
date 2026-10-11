@@ -84,6 +84,30 @@ struct PreflightCheckSummary {
 };
 
 /**
+ * Individual check difference detected between preflight runs.
+ */
+struct PreflightCheckDiff {
+    std::string check_name;          // "File Readability", "Package Metadata", "Available Storage"
+    bool status_changed{false};      // Whether passed status toggled
+    bool previously_passed{false};
+    bool currently_passed{false};
+    std::string previous_details;
+    std::string current_details;
+    std::string description;          // Formatted human-readable explanation of change
+};
+
+/**
+ * Compares two preflight summaries and returns any detected differences.
+ */
+std::vector<PreflightCheckDiff> diff_preflight_summaries(const PreflightCheckSummary& previous,
+                                                         const PreflightCheckSummary& current);
+
+/**
+ * Returns formatted multi-line string explaining changed preflight results.
+ */
+std::string format_preflight_diffs(const std::vector<PreflightCheckDiff>& diffs);
+
+/**
  * Result of package preflight validation step before dispatch.
  */
 struct PreflightResult {
@@ -130,6 +154,11 @@ struct InstallTask {
     std::string original_task_id;
     InstallErrorCode original_error_code{InstallErrorCode::None};
     std::string original_error_message;
+
+    // Preflight snapshots and immediate-dispatch diffs
+    bool has_preflight_snapshot{false};
+    PreflightCheckSummary preflight_summary_snapshot;
+    std::vector<PreflightCheckDiff> preflight_changes;
 
     // Timestamps
     std::string created_timestamp;
@@ -203,6 +232,9 @@ struct HistoryFilterOptions {
     HistorySortField sort_field{HistorySortField::Timestamp};
     HistorySortOrder sort_order{HistorySortOrder::Descending};
 };
+
+std::string serialize_history_filter_options(const HistoryFilterOptions& options);
+HistoryFilterOptions deserialize_history_filter_options(const std::string& serialized);
 
 /**
  * Export install history to JSON string.
@@ -336,7 +368,12 @@ public:
     InstallPipeline(const InstallPipeline&) = delete;
     InstallPipeline& operator=(const InstallPipeline&) = delete;
 
-    std::string queue_item(const GameItem& item, const std::string& title_id);
+    std::string queue_item(const GameItem& item, const std::string& title_id,
+                           const std::optional<PreflightCheckSummary>& summary_snapshot = std::nullopt);
+
+    // Saved history filter options for cross-session and modal persistence
+    const HistoryFilterOptions& saved_history_filter_options() const { return saved_history_filter_options_; }
+    void set_saved_history_filter_options(const HistoryFilterOptions& options);
     std::string retry_task(const std::string& task_id_or_path, std::string* out_error = nullptr);
     QueueCheckResult check_queue_preflight(const std::string& source_path, bool is_retry_intent = false) const;
 
@@ -418,6 +455,8 @@ private:
     TaskProgressCallback progress_callback_;
     TaskFinishedCallback task_finished_callback_;
     BatchFinishedCallback batch_finished_callback_;
+
+    HistoryFilterOptions saved_history_filter_options_;
 
     void worker_loop();
     std::string generate_task_id();
