@@ -23,7 +23,8 @@ enum class DialogType {
     FolderPicker,
     SearchFilter,
     Notification,
-    RecoveryGuidance
+    RecoveryGuidance,
+    InstallHistory
 };
 
 struct DialogModel {
@@ -88,7 +89,17 @@ public:
     const DialogModel& dialog_model() const { return dialog_model_; }
     void show_shadowmount_lock();
     void show_recovery_guidance(const std::string& title, const std::string& message, const std::string& steps);
+    void show_install_history();
     void dismiss_dialog();
+
+    // Install History navigation and searching
+    const std::vector<InstallTask>& history_items() const { return history_items_; }
+    size_t history_selected_index() const { return history_selected_index_; }
+    void history_select_next();
+    void history_select_prev();
+    void set_history_search_query(const std::string& query);
+    const std::string& history_search_query() const { return history_search_query_; }
+    std::optional<InstallTask> selected_history_item() const;
 
     // Input processing
     bool handle_pad_input(const InputManager& input);
@@ -127,6 +138,12 @@ private:
     size_t focused_index_{0};
 
     DialogModel dialog_model_;
+
+    // Install History dialog state
+    std::string history_search_query_;
+    size_t history_selected_index_{0};
+    std::vector<InstallTask> history_items_;
+    void update_history_view();
 
     ViewLayoutEngine layout_engine_;
     ScannerEngine scanner_;

@@ -83,6 +83,43 @@ void test_search_and_filters() {
     TEST_ASSERT(prompts[0].glyph == ButtonGlyph::Triangle);
 }
 
+
+static void test_install_history_dialog() {
+    auto delegate = std::make_shared<MockInstallDelegate>();
+    auto pipeline = std::make_shared<InstallPipeline>(delegate);
+    UiShell shell;
+    shell.set_installer(pipeline);
+
+    // Queue and fail an item
+    GameItem item;
+    item.filename = "patch.pkg";
+    item.display_name = "Update Patch";
+    item.format = "pkg";
+    std::string task_id = pipeline->queue_item(item, "PPSA12345");
+    delegate->configure_failure("patch.pkg", InstallErrorCode::CorruptedHeader, "Corrupted patch payload");
+    pipeline->process_one_step();
+
+    // Open install history
+    shell.show_install_history();
+    TEST_ASSERT(shell.active_dialog() == DialogType::InstallHistory);
+    TEST_ASSERT(shell.dialog_model().title == "Install History & Diagnostics");
+    TEST_ASSERT(shell.selected_history_item().has_value());
+    TEST_ASSERT(shell.selected_history_item()->task_id == task_id);
+    TEST_ASSERT(shell.selected_history_item()->status == InstallStatus::Failed);
+
+    // Filter history search
+    shell.set_history_search_query("nonexistent");
+    TEST_ASSERT(!shell.selected_history_item().has_value());
+    shell.set_history_search_query("PPSA12345");
+    TEST_ASSERT(shell.selected_history_item().has_value());
+
+    // Dismiss dialog using Circle (Cancel)
+    InputManager input;
+    input.feed_raw_buttons(pad_bits::kCircle);
+    TEST_ASSERT(shell.handle_pad_input(input));
+    TEST_ASSERT(shell.active_dialog() == DialogType::None);
+}
+
 int main() {
     std::cout << "[TEST] UI mode/lock" << std::endl;
     test_modes_and_lock();
@@ -90,6 +127,8 @@ int main() {
     test_layouts_and_navigation();
     std::cout << "[TEST] search/filter" << std::endl;
     test_search_and_filters();
+    std::cout << "[TEST] install history dialog" << std::endl;
+    test_install_history_dialog();
     std::cout << "All UI shell tests passed." << std::endl;
     return 0;
 }

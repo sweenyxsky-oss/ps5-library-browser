@@ -9,6 +9,13 @@
 #include <cctype>
 #include <cerrno>
 #include <cstring>
+#include <ctime>
+#include <fstream>
+#include <filesystem>
+#include <cstdint>
+#if defined(__linux__)
+#include <sys/statvfs.h>
+#endif
 #include <system_error>
 #include <nlohmann/json.hpp>
 
@@ -62,6 +69,9 @@ const char* install_error_name(InstallErrorCode code) {
         case InstallErrorCode::CorruptedHeader: return "CorruptedHeader";
         case InstallErrorCode::TargetAppRunning: return "TargetAppRunning";
         case InstallErrorCode::InstallInterrupted: return "InstallInterrupted";
+        case InstallErrorCode::FileUnreadable: return "FileUnreadable";
+        case InstallErrorCode::MetadataMissing: return "MetadataMissing";
+        case InstallErrorCode::DuplicateInstallBlocked: return "DuplicateInstallBlocked";
         default: return "Unknown";
     }
 }
@@ -93,7 +103,9 @@ InstallErrorCode install_error_code_from_string(const std::string& value) {
         {"IoError", InstallErrorCode::IoError}, {"UnsupportedPlatform", InstallErrorCode::UnsupportedPlatform},
         {"MissingPrivilege", InstallErrorCode::MissingPrivilege}, {"SystemModuleMissing", InstallErrorCode::SystemModuleMissing},
         {"CorruptedHeader", InstallErrorCode::CorruptedHeader}, {"TargetAppRunning", InstallErrorCode::TargetAppRunning},
-        {"InstallInterrupted", InstallErrorCode::InstallInterrupted}, {"Unknown", InstallErrorCode::Unknown}
+        {"InstallInterrupted", InstallErrorCode::InstallInterrupted}, {"FileUnreadable", InstallErrorCode::FileUnreadable},
+        {"MetadataMissing", InstallErrorCode::MetadataMissing}, {"DuplicateInstallBlocked", InstallErrorCode::DuplicateInstallBlocked},
+        {"Unknown", InstallErrorCode::Unknown}
     };
     for (const auto& value_pair : values) if (value == value_pair.first) return value_pair.second;
     return InstallErrorCode::Unknown;
@@ -123,10 +135,149 @@ std::string get_recovery_guidance(InstallErrorCode code, const std::string& extr
             guidance = "Close the game or application using this title, confirm it is no longer running, then retry."; break;
         case InstallErrorCode::InstallInterrupted:
             guidance = "The app restarted during installation. Check the PS5 notification/installation queue for the package result before retrying to avoid a duplicate install."; break;
+        case InstallErrorCode::FileUnreadable:
+            guidance = "Check that the package exists, the media is mounted, and the current process can read it. For NFS, verify export permissions and credentials, remount the share, then retry."; break;
+        case InstallErrorCode::MetadataMissing:
+            guidance = "The package does not expose the required PS5 metadata to this host-side preflight. Verify it is a supported PS5 package and not a renamed archive or incomplete split package; use a target-side validator before installation."; break;
+        case InstallErrorCode::DuplicateInstallBlocked:
+            guidance = "An active or queued job already targets this package. Let that job finish or cancel it before attempting another install."; break;
         default: guidance = "Review the console installation logs and package path, then retry. If the error persists, include the error code and runtime diagnostic in a bug report."; break;
     }
     if (!extra_details.empty()) guidance += "\nRuntime details: " + extra_details;
     return guidance;
+}
+
+namespace {
+std::string utc_timestamp_now() {
+    const std::time_t now = std::time(nullptr);
+    std::tm tm{};
+#if defined(_WIN32)
+    gmtime_s(&tm, &now);
+#else
+    gmtime_r(&now, &tm);
+#endif
+    std::ostringstream out;
+    out << std::put_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
+    return out.str();
+}
+std::string lower_copy(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value;
+}
+bool has_pkg_magic(const unsigned char* bytes, size_t count) {
+    if (count < 4) return false;
+    bool is_sony = (bytes[0] == 0x7F && bytes[1] == 'P' && bytes[2] == 'K' && bytes[3] == 'G');
+    bool is_hb = (bytes[0] == 'P' && bytes[1] == 'K' && bytes[2] == 'G' && bytes[3] == '\0');
+    return is_sony || is_hb;
+}
+} // namespace
+
+PreflightResult run_package_preflight(const std::string& package_path,
+                                      const std::string& target_storage_dir,
+                                      uint64_t safety_margin_bytes) {
+    PreflightResult result;
+    const std::filesystem::path path(package_path);
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec) || ec) {
+        result.passed = false;
+        result.error_code = InstallErrorCode::FileNotFound;
+        result.error_message = "Package does not exist: " + package_path;
+        result.recovery_guidance = get_recovery_guidance(result.error_code, result.error_message);
+        return result;
+    }
+    if (!std::filesystem::is_regular_file(path, ec) || ec) {
+        result.passed = false;
+        result.error_code = InstallErrorCode::InvalidPackage;
+        result.error_message = "Package path is not a regular readable package file";
+        result.recovery_guidance = get_recovery_guidance(result.error_code, result.error_message);
+        return result;
+    }
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        result.passed = false;
+        result.error_code = InstallErrorCode::FileUnreadable;
+        result.error_message = "Cannot open package for reading: " + package_path;
+        result.recovery_guidance = get_recovery_guidance(result.error_code, result.error_message);
+        return result;
+    }
+    std::error_code size_ec;
+    result.file_size_bytes = std::filesystem::file_size(path, size_ec);
+    if (size_ec || result.file_size_bytes == 0) {
+        result.passed = false;
+        result.error_code = InstallErrorCode::InvalidPackage;
+        result.error_message = "Package is empty or its size cannot be read";
+        result.recovery_guidance = get_recovery_guidance(result.error_code, result.error_message);
+        return result;
+    }
+    std::array<unsigned char, 64> header{};
+    in.read(reinterpret_cast<char*>(header.data()), static_cast<std::streamsize>(header.size()));
+    const size_t got = static_cast<size_t>(in.gcount());
+    in.close();
+    std::string ext = lower_copy(path.extension().string());
+    result.detected_format = (ext.rfind(".", 0) == 0) ? ext.substr(1) : ext;
+    if (ext == ".pkg") {
+        if (got < 4 || !has_pkg_magic(header.data(), got)) {
+            result.passed = false;
+            result.error_code = InstallErrorCode::CorruptedHeader;
+            result.error_message = "PKG header magic is missing or unreadable";
+            result.recovery_guidance = get_recovery_guidance(result.error_code, result.error_message);
+            return result;
+        }
+        // PS5 package header includes a title identifier in its package metadata, but the
+        // identifier is not safely decoded by this portable host scanner. Do not guess it.
+        result.error_message = "PKG header signature is readable; title metadata validation requires a target-SDK package parser";
+    } else if (ext == ".ffpkg" || ext == ".exfat") {
+        if (got < 16) {
+            result.passed = false;
+            result.error_code = InstallErrorCode::MetadataMissing;
+            result.error_message = "Package container is too short to expose required metadata";
+            result.recovery_guidance = get_recovery_guidance(result.error_code, result.error_message);
+            return result;
+        }
+        result.error_message = "Container is readable; format-specific title metadata cannot be validated by the portable preflight";
+    } else {
+        result.passed = false;
+        result.error_code = InstallErrorCode::MetadataMissing;
+        result.error_message = "Unsupported package extension: " + ext;
+        result.recovery_guidance = get_recovery_guidance(result.error_code, result.error_message);
+        return result;
+    }
+    result.required_storage_bytes = result.file_size_bytes + safety_margin_bytes;
+#if defined(__linux__)
+    struct statvfs fs{};
+    std::filesystem::path target(target_storage_dir);
+    while (!target.empty() && !std::filesystem::exists(target, ec)) {
+        ec.clear();
+        const auto parent = target.parent_path();
+        if (parent == target) break;
+        target = parent;
+    }
+    if (!target.empty() && ::statvfs(target.c_str(), &fs) == 0) {
+        result.available_storage_bytes = static_cast<uint64_t>(fs.f_bavail) * static_cast<uint64_t>(fs.f_frsize);
+        if (result.available_storage_bytes < result.required_storage_bytes) {
+            result.passed = false;
+            result.error_code = InstallErrorCode::InsufficientSpace;
+            result.error_message = "Available storage is below the package size plus safety margin";
+            result.recovery_guidance = get_recovery_guidance(result.error_code, result.error_message);
+            return result;
+        }
+    } else {
+        result.passed = false;
+        result.error_code = InstallErrorCode::UnsupportedPlatform;
+        result.error_message = "Could not query target installation storage capacity";
+        result.recovery_guidance = get_recovery_guidance(result.error_code, result.error_message);
+        return result;
+    }
+#else
+    (void)target_storage_dir;
+    result.passed = false;
+    result.error_code = InstallErrorCode::UnsupportedPlatform;
+    result.error_message = "Storage capacity check is unavailable on this platform";
+    result.recovery_guidance = get_recovery_guidance(result.error_code, result.error_message);
+    return result;
+#endif
+    result.passed = true;
+    return result;
 }
 
 float InstallTask::progress_ratio() const {
@@ -310,6 +461,10 @@ InstallTask task_from_json(const json& j) {
     task.status = install_status_from_string(j.value("status", "Queued"));
     task.error_code = install_error_code_from_string(j.value("error_code", "None"));
     task.error_message = j.value("error_message", ""); task.recovery_guidance = j.value("recovery_guidance", "");
+    task.retry_count = j.value("retry_count", size_t{0}); task.original_task_id = j.value("original_task_id", "");
+    task.original_error_code = install_error_code_from_string(j.value("original_error_code", "None"));
+    task.original_error_message = j.value("original_error_message", "");
+    task.created_timestamp = j.value("created_timestamp", ""); task.completed_timestamp = j.value("completed_timestamp", "");
     return task;
 }
 json task_to_json(const InstallTask& task) {
@@ -318,7 +473,10 @@ json task_to_json(const InstallTask& task) {
         {"format", task.format}, {"kind", to_string(task.kind)}, {"total_bytes", task.total_bytes},
         {"processed_bytes", task.processed_bytes}, {"status", to_string(task.status)},
         {"error_code", install_error_name(task.error_code)},
-        {"error_message", task.error_message}, {"recovery_guidance", task.recovery_guidance}};
+        {"error_message", task.error_message}, {"recovery_guidance", task.recovery_guidance},
+        {"retry_count", task.retry_count}, {"original_task_id", task.original_task_id},
+        {"original_error_code", install_error_name(task.original_error_code)}, {"original_error_message", task.original_error_message},
+        {"created_timestamp", task.created_timestamp}, {"completed_timestamp", task.completed_timestamp}};
 }
 }
 
@@ -332,12 +490,91 @@ void InstallPipeline::set_delegate(std::shared_ptr<IInstallDelegate> delegate) {
 }
 std::string InstallPipeline::generate_task_id() { return "task_" + std::to_string(next_id_counter_++); }
 std::string InstallPipeline::queue_item(const GameItem& item, const std::string& title_id) {
+    const std::string source = item.absolute_path.empty() ? item.filename : item.absolute_path;
+    const auto duplicate = check_queue_preflight(source, false);
+    if (!duplicate.can_queue) return {};
     std::lock_guard<std::mutex> lock(queue_mutex_);
     InstallTask task; task.task_id = generate_task_id(); task.title_id = title_id; task.package_filename = item.filename;
     task.display_name = item.display_name.empty() ? item.filename : item.display_name;
-    task.source_path = item.absolute_path.empty() ? item.filename : item.absolute_path; task.format = item.format;
+    task.source_path = source; task.format = item.format;
     task.kind = item.kind; task.total_bytes = item.size_bytes; task.status = InstallStatus::Queued;
+    task.created_timestamp = utc_timestamp_now();
     task_queue_.push_back(task); save_state_locked(); return task.task_id;
+}
+
+QueueCheckResult InstallPipeline::check_queue_preflight(const std::string& source_path, bool is_retry_intent) const {
+    QueueCheckResult result;
+    result.is_retry = is_retry_intent;
+    const auto tasks = all_tasks();
+    for (auto it = tasks.rbegin(); it != tasks.rend(); ++it) {
+        if (it->source_path != source_path && it->package_filename != source_path) continue;
+        if (it->status == InstallStatus::Queued || it->status == InstallStatus::InProgress) {
+            result.can_queue = false; result.is_duplicate = true;
+            result.reason = "A queued or active install already targets this package"; result.existing_task = *it; return result;
+        }
+        if (is_retry_intent) {
+            if (it->status != InstallStatus::Failed && it->status != InstallStatus::Interrupted) {
+                result.can_queue = false;
+                result.reason = "Only failed or interrupted package jobs can be retried";
+                result.existing_task = *it;
+                return result;
+            }
+        } else {
+            if (it->status == InstallStatus::Failed || it->status == InstallStatus::Interrupted) {
+                result.can_queue = false;
+                result.reason = "Package has previous failure/interruption. Use retry to re-attempt install.";
+                result.existing_task = *it;
+                return result;
+            }
+            if (it->status == InstallStatus::Completed) {
+                result.can_queue = false;
+                result.reason = "Package has already been installed successfully.";
+                result.existing_task = *it;
+                return result;
+            }
+        }
+        break;
+    }
+    if (enable_preflight_) {
+        const auto preflight = run_package_preflight(source_path, target_storage_dir_);
+        if (!preflight.passed) {
+            result.can_queue = false;
+            result.reason = preflight.error_message + " | " + preflight.recovery_guidance;
+        }
+    }
+    return result;
+}
+
+std::string InstallPipeline::retry_task(const std::string& task_id_or_path, std::string* out_error) {
+    std::optional<InstallTask> original;
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        for (auto it = task_history_.rbegin(); it != task_history_.rend(); ++it) {
+            if (it->task_id == task_id_or_path || it->source_path == task_id_or_path || it->package_filename == task_id_or_path) {
+                original = *it; break;
+            }
+        }
+        if (!original && active_task_ && (active_task_->task_id == task_id_or_path || active_task_->source_path == task_id_or_path)) original = *active_task_;
+    }
+    if (!original || (original->status != InstallStatus::Failed && original->status != InstallStatus::Interrupted)) {
+        if (out_error) *out_error = "Retry is available only for failed or interrupted jobs";
+        return {};
+    }
+    const auto check = check_queue_preflight(original->source_path, true);
+    if (!check.can_queue) {
+        if (out_error) *out_error = check.reason;
+        return {};
+    }
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    InstallTask retry = *original;
+    retry.task_id = generate_task_id(); retry.status = InstallStatus::Queued; retry.error_code = InstallErrorCode::None;
+    retry.error_message.clear(); retry.recovery_guidance.clear(); retry.processed_bytes = 0;
+    retry.retry_count = original->retry_count + 1; retry.original_task_id = original->task_id;
+    retry.original_error_code = original->error_code; retry.original_error_message = original->error_message;
+    retry.created_timestamp = utc_timestamp_now(); retry.completed_timestamp.clear();
+    retry.start_time = {}; retry.finish_time = {};
+    task_queue_.push_back(retry); save_state_locked();
+    return retry.task_id;
 }
 std::string InstallPipeline::install_all_dlcs(const GameEntry& entry) {
     return queue_batch(entry.title_id, "DLCs for " + entry.title, ItemKind::Dlc, entry.dlcs);
@@ -351,7 +588,7 @@ std::string InstallPipeline::queue_batch(const std::string& title_id, const std:
         InstallTask task; task.task_id = generate_task_id(); task.title_id = title_id; task.package_filename = item.filename;
         task.display_name = item.display_name.empty() ? item.filename : item.display_name;
         task.source_path = item.absolute_path.empty() ? item.filename : item.absolute_path; task.format = item.format;
-        task.kind = item.kind; task.total_bytes = item.size_bytes; task.status = InstallStatus::Queued;
+        task.kind = item.kind; task.total_bytes = item.size_bytes; task.status = InstallStatus::Queued; task.created_timestamp = utc_timestamp_now();
         active_batch_.total_bytes += item.size_bytes; task_queue_.push_back(task);
     }
     save_state_locked(); return active_batch_.batch_id;
@@ -385,6 +622,23 @@ std::optional<InstallTask> InstallPipeline::get_task_by_path(const std::string& 
     }
     return std::nullopt;
 }
+std::vector<InstallTask> InstallPipeline::search_history(const std::string& query, std::optional<InstallStatus> status_filter) const {
+    auto tasks = all_tasks();
+    std::string needle = lower_copy(query);
+    tasks.erase(std::remove_if(tasks.begin(), tasks.end(), [&](const InstallTask& task) {
+        if (status_filter && task.status != *status_filter) return true;
+        if (needle.empty()) return false;
+        const std::string haystack = lower_copy(task.title_id + " " + task.package_filename + " " + task.display_name + " " +
+            task.source_path + " " + task.task_id + " " + to_string(task.status) + " " + to_string(task.error_code) + " " +
+            task.error_message + " " + task.recovery_guidance + " " + task.created_timestamp + " " + task.completed_timestamp);
+        return haystack.find(needle) == std::string::npos;
+    }), tasks.end());
+    std::stable_sort(tasks.begin(), tasks.end(), [](const InstallTask& a, const InstallTask& b) {
+        return a.created_timestamp > b.created_timestamp;
+    });
+    return tasks;
+}
+
 InstallStatus InstallPipeline::get_item_status(const std::string& source_path) const { const auto task = get_task_by_path(source_path); return task ? task->status : InstallStatus::Queued; }
 void InstallPipeline::set_progress_callback(TaskProgressCallback cb) { progress_callback_ = std::move(cb); }
 void InstallPipeline::set_task_finished_callback(TaskFinishedCallback cb) { task_finished_callback_ = std::move(cb); }
@@ -395,7 +649,7 @@ bool InstallPipeline::save_state() { std::lock_guard<std::mutex> lock(queue_mute
 void InstallPipeline::save_state_locked() {
     if (state_filepath_.empty()) return;
     try {
-        json root; root["schema_version"] = 1; root["tasks"] = json::array();
+        json root; root["schema_version"] = 2; root["tasks"] = json::array();
         for (const auto& task : task_history_) root["tasks"].push_back(task_to_json(task));
         if (active_task_) root["tasks"].push_back(task_to_json(*active_task_));
         for (const auto& task : task_queue_) root["tasks"].push_back(task_to_json(task));
@@ -413,13 +667,13 @@ bool InstallPipeline::load_and_restore_state() {
     std::lock_guard<std::mutex> lock(queue_mutex_);
     try {
         std::ifstream in(state_filepath_); if (!in) return false;
-        json root; in >> root; if (root.value("schema_version", 0) != 1 || !root.contains("tasks")) return false;
+        json root; in >> root; const int schema = root.value("schema_version", 0); if ((schema != 1 && schema != 2) || !root.contains("tasks")) return false;
         task_queue_.clear(); task_history_.clear(); active_task_.reset();
         for (const auto& encoded : root["tasks"]) {
             InstallTask task = task_from_json(encoded);
             if (task.status == InstallStatus::InProgress) {
                 task.status = InstallStatus::Interrupted; task.error_code = InstallErrorCode::InstallInterrupted;
-                task.error_message = "Application stopped while this package was installing";
+                task.error_message = "Application stopped while this package was installing"; task.completed_timestamp = utc_timestamp_now();
                 task.recovery_guidance = get_recovery_guidance(task.error_code);
                 task_history_.push_back(task);
             } else if (task.status == InstallStatus::Queued) task_queue_.push_back(task);
@@ -436,7 +690,7 @@ bool InstallPipeline::process_one_step() {
         std::lock_guard<std::mutex> lock(queue_mutex_);
         if (task_queue_.empty()) return false;
         task = task_queue_.front(); task_queue_.erase(task_queue_.begin()); task.status = InstallStatus::InProgress;
-        task.start_time = std::chrono::steady_clock::now(); active_task_ = task;
+        task.start_time = std::chrono::steady_clock::now(); if (task.created_timestamp.empty()) task.created_timestamp = utc_timestamp_now(); active_task_ = task;
         if (active_batch_.is_running) { active_batch_.current_item_index = active_batch_.completed_items + active_batch_.failed_items + active_batch_.cancelled_items + 1; active_batch_.current_item_name = task.display_name; }
         save_state_locked();
     }
@@ -450,7 +704,20 @@ bool InstallPipeline::process_one_step() {
         save_state_locked(); if (progress_callback_) progress_callback_(task, active_batch_); return true;
     };
     InstallErrorCode code = InstallErrorCode::None; std::string err_msg;
-    bool ok = delegate_->install_package(task, chunk_cb, code, err_msg); task.finish_time = std::chrono::steady_clock::now();
+    bool ok = true;
+    if (enable_preflight_) {
+        const auto preflight = run_package_preflight(task.source_path, target_storage_dir_);
+        if (!preflight.passed) {
+            ok = false;
+            code = preflight.error_code;
+            err_msg = "Preflight check failed: " + preflight.error_message + " | " + preflight.recovery_guidance;
+        } else if (preflight.file_size_bytes > 0) {
+            task.total_bytes = preflight.file_size_bytes;
+        }
+    }
+    if (ok) ok = delegate_->install_package(task, chunk_cb, code, err_msg);
+    task.finish_time = std::chrono::steady_clock::now();
+    task.completed_timestamp = utc_timestamp_now();
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
         if (ok) { task.status = InstallStatus::Completed; task.error_code = InstallErrorCode::None; task.processed_bytes = task.total_bytes; task.error_message.clear(); task.recovery_guidance.clear(); if (active_batch_.is_running) active_batch_.completed_items++; }

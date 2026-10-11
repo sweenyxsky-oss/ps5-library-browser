@@ -159,6 +159,76 @@ void UiShell::show_recovery_guidance(const std::string& title,
     dialog_model_.extra_payload = steps;
 }
 
+
+void UiShell::show_install_history() {
+    dialog_model_.type = DialogType::InstallHistory;
+    dialog_model_.title = "Install History & Diagnostics";
+    history_selected_index_ = 0;
+    update_history_view();
+}
+
+void UiShell::update_history_view() {
+    if (!installer_) {
+        history_items_.clear();
+        dialog_model_.message = "No installer pipeline connected";
+        dialog_model_.secondary_text.clear();
+        return;
+    }
+    history_items_ = installer_->search_history(history_search_query_);
+    if (history_items_.empty()) {
+        history_selected_index_ = 0;
+        dialog_model_.message = history_search_query_.empty() ? "No install jobs recorded" : "No jobs matching query: " + history_search_query_;
+        dialog_model_.secondary_text = "Press Square to search, Circle to close.";
+        return;
+    }
+    if (history_selected_index_ >= history_items_.size()) {
+        history_selected_index_ = history_items_.size() - 1;
+    }
+    const auto& selected = history_items_[history_selected_index_];
+    dialog_model_.message = "[" + std::to_string(history_selected_index_ + 1) + "/" + std::to_string(history_items_.size()) + "] " +
+                            selected.display_name + " (" + selected.title_id + ") - " + to_string(selected.status);
+    std::string sec = "File: " + selected.package_filename + " | Format: " + selected.format + "\n";
+    sec += "Created: " + (selected.created_timestamp.empty() ? "Unknown" : selected.created_timestamp);
+    if (!selected.completed_timestamp.empty()) {
+        sec += " | Completed: " + selected.completed_timestamp;
+    }
+    if (selected.retry_count > 0) {
+        sec += "\nRetry #" + std::to_string(selected.retry_count) + " (Orig Task: " + selected.original_task_id + ", Orig Error: " + to_string(selected.original_error_code) + ")";
+    }
+    if (!selected.error_message.empty()) {
+        sec += "\nError: " + selected.error_message;
+    }
+    if (!selected.recovery_guidance.empty()) {
+        sec += "\nRecovery: " + selected.recovery_guidance;
+    }
+    dialog_model_.secondary_text = sec;
+}
+
+void UiShell::history_select_next() {
+    if (history_items_.empty()) return;
+    history_selected_index_ = (history_selected_index_ + 1) % history_items_.size();
+    update_history_view();
+}
+
+void UiShell::history_select_prev() {
+    if (history_items_.empty()) return;
+    history_selected_index_ = (history_selected_index_ + history_items_.size() - 1) % history_items_.size();
+    update_history_view();
+}
+
+void UiShell::set_history_search_query(const std::string& query) {
+    history_search_query_ = query;
+    history_selected_index_ = 0;
+    update_history_view();
+}
+
+std::optional<InstallTask> UiShell::selected_history_item() const {
+    if (history_selected_index_ < history_items_.size()) {
+        return history_items_[history_selected_index_];
+    }
+    return std::nullopt;
+}
+
 void UiShell::dismiss_dialog() {
     dialog_model_.type = DialogType::None;
     dialog_model_.title.clear();
@@ -262,6 +332,30 @@ bool UiShell::handle_pad_input(const InputManager& input) {
         } else if (dialog_model_.type == DialogType::RecoveryGuidance) {
             if (input.action_triggered(LogicalAction::Confirm) || input.action_triggered(LogicalAction::Cancel)) {
                 dismiss_dialog();
+                return true;
+            }
+        } else if (dialog_model_.type == DialogType::InstallHistory) {
+            if (input.action_triggered(LogicalAction::Cancel)) {
+                dismiss_dialog();
+                return true;
+            }
+            if (input.action_triggered(LogicalAction::NavDown)) {
+                history_select_next();
+                return true;
+            }
+            if (input.action_triggered(LogicalAction::NavUp)) {
+                history_select_prev();
+                return true;
+            }
+            if (input.action_triggered(LogicalAction::Confirm)) {
+                // If selected task is failed, retry it
+                const auto selected = selected_history_item();
+                if (selected && (selected->status == InstallStatus::Failed || selected->status == InstallStatus::Interrupted)) {
+                    if (installer_) {
+                        installer_->retry_task(selected->task_id);
+                        update_history_view();
+                    }
+                }
                 return true;
             }
         } else {
@@ -413,6 +507,13 @@ std::vector<ButtonPrompt> UiShell::get_contextual_prompts() const {
 
     if (dialog_model_.type == DialogType::RecoveryGuidance) {
         prompts.push_back({ButtonGlyph::Cross, "Dismiss Guidance", true, true});
+        return prompts;
+    }
+
+    if (dialog_model_.type == DialogType::InstallHistory) {
+        prompts.push_back({ButtonGlyph::DPadUpDown, "Select Job", true, false});
+        prompts.push_back({ButtonGlyph::Cross, "Retry Failed", true, true});
+        prompts.push_back({ButtonGlyph::Circle, "Close History", true, false});
         return prompts;
     }
 

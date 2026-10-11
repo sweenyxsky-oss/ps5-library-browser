@@ -165,20 +165,43 @@ std::optional<FormattedPackageDetail> GameInspector::selected_item() const {
 }
 
 bool GameInspector::can_install_selected() const {
-    return selected_item().has_value();
+    const auto item = selected_item();
+    if (!item.has_value()) return false;
+    return !item->has_active_task;
+}
+
+bool GameInspector::can_retry_selected() const {
+    const auto item = selected_item();
+    if (!item.has_value()) return false;
+    return item->can_retry;
 }
 
 bool GameInspector::can_install_all_dlcs() const {
     return !entry_.dlcs.empty();
 }
 
+std::vector<std::string> GameInspector::available_action_labels() const {
+    std::vector<std::string> labels;
+    if (can_retry_selected()) {
+        labels.push_back("Retry Install");
+    } else {
+        labels.push_back("Install Selected");
+    }
+    if (active_tab_ == InspectorTab::Dlc && can_install_all_dlcs()) {
+        labels.push_back("Install All DLCs");
+    }
+    return labels;
+}
+
 void GameInspector::select_next_action() {
-    const size_t count = (active_tab_ == InspectorTab::Dlc && can_install_all_dlcs()) ? 2 : 1;
+    const auto labels = available_action_labels();
+    const size_t count = labels.empty() ? 1 : labels.size();
     selected_action_button_ = (selected_action_button_ + 1) % count;
 }
 
 void GameInspector::select_prev_action() {
-    const size_t count = (active_tab_ == InspectorTab::Dlc && can_install_all_dlcs()) ? 2 : 1;
+    const auto labels = available_action_labels();
+    const size_t count = labels.empty() ? 1 : labels.size();
     selected_action_button_ = (selected_action_button_ + count - 1) % count;
 }
 
@@ -233,20 +256,25 @@ bool GameInspector::handle_pad_input(const InputManager& input, InstallPipeline&
 
     if (input.action_triggered(LogicalAction::Confirm)) {
         if (focus_section_ == InspectorFocusSection::Actions) {
-            if (active_tab_ == InspectorTab::Dlc && can_install_all_dlcs() && selected_action_button_ == 1) {
+            const auto labels = available_action_labels();
+            if (selected_action_button_ < labels.size() && labels[selected_action_button_] == "Install All DLCs") {
                 pipeline.install_all_dlcs(entry_);
             } else if (const auto selected = selected_item()) {
-                GameItem item;
-                item.kind = selected->kind;
-                item.filename = selected->filename;
-                item.absolute_path = selected->absolute_path;
-                item.format = selected->extension.empty() ? "" : selected->extension.substr(1);
-                item.size_bytes = selected->raw_size_bytes;
-                item.size_known = selected->formatted_size != "Unknown";
-                item.formatted_size = selected->formatted_size;
-                item.version = selected->version;
-                item.display_name = selected->display_name;
-                pipeline.queue_item(item, entry_.title_id);
+                if (selected->can_retry) {
+                    pipeline.retry_task(selected->absolute_path);
+                } else if (!selected->has_active_task) {
+                    GameItem item;
+                    item.kind = selected->kind;
+                    item.filename = selected->filename;
+                    item.absolute_path = selected->absolute_path;
+                    item.format = selected->extension.empty() ? "" : selected->extension.substr(1);
+                    item.size_bytes = selected->raw_size_bytes;
+                    item.size_known = selected->formatted_size != "Unknown";
+                    item.formatted_size = selected->formatted_size;
+                    item.version = selected->version;
+                    item.display_name = selected->display_name;
+                    pipeline.queue_item(item, entry_.title_id);
+                }
             }
         } else if (focus_section_ == InspectorFocusSection::ItemList) {
             // Selecting an item in item list focuses action button
@@ -278,7 +306,9 @@ std::vector<ButtonPrompt> GameInspector::get_contextual_prompts() const {
         {ButtonGlyph::DPadLeftRight, "Switch Tab / Action", true, false},
         {ButtonGlyph::DPadUpDown, "Navigate", true, false}
     };
-    if (can_install_selected()) {
+    if (can_retry_selected()) {
+        prompts.push_back({ButtonGlyph::Cross, "Retry Install", true, true});
+    } else if (can_install_selected()) {
         prompts.push_back({ButtonGlyph::Cross, "Install Selected", true, true});
     }
     if (active_tab_ == InspectorTab::Dlc && can_install_all_dlcs()) {
@@ -296,6 +326,8 @@ void GameInspector::sync_with_pipeline(const InstallPipeline& pipeline) {
             detail.error_message = task->error_message;
             detail.recovery_guidance = task->recovery_guidance;
             detail.progress_percent = task->progress_percent();
+            detail.has_active_task = (task->status == InstallStatus::Queued || task->status == InstallStatus::InProgress);
+            detail.can_retry = (task->status == InstallStatus::Failed || task->status == InstallStatus::Interrupted);
 
             switch (task->status) {
                 case InstallStatus::Queued:
@@ -317,6 +349,9 @@ void GameInspector::sync_with_pipeline(const InstallPipeline& pipeline) {
                     detail.status_badge = "INTERRUPTED (Restarted)";
                     break;
             }
+        } else {
+            detail.has_active_task = false;
+            detail.can_retry = false;
         }
     }
 }

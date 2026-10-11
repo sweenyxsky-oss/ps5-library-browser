@@ -68,7 +68,8 @@ ps5-library-browser/
 │   ├── scanner_cache_test.cpp       # Milestone 2 tests
 │   ├── ui_shell_test.cpp            # Milestone 3 tests
 │   ├── inspector_installer_test.cpp # Milestone 4 tests
-│   └── ps5_installer_persistence_test.cpp # PS5 install delegate, persistence & recovery tests
+│   ├── ps5_installer_persistence_test.cpp # PS5 install delegate, persistence & recovery tests
+│   └── install_retry_preflight_history_test.cpp # Retry, preflight & searchable history tests
 └── README.md
 ```
 
@@ -123,6 +124,9 @@ ctest --test-dir build --output-on-failure
   - **Persistent Install Jobs Across Restarts**: Atomic JSON state tracking (`/tmp/ps5_library_install_jobs.json`) persisting queued/completed jobs; automatically restores `InProgress` tasks as `Interrupted` on restart
   - **Post-Install Library & Inspector Refresh**: Real-time promotion of item confidence and inspector state upon package installation completion
   - **Actionable Recovery Guidance**: Granular troubleshooting steps for every error code (unsupported platform, missing privileges, missing system services, out of storage, corrupted header, interrupted install)
+  - **Install Preflight Validation**: Multi-stage verification inspecting file existence, readability, storage capacity against package size (with configurable safety margin), and header signature format (`.pkg` magic `\x7FPKG`/`PKG\0`, `.ffpkg`/`.exfat` header sizes); prevents corrupt package dispatches before calling target install delegates.
+  - **Duplicate Prevention & Retry Workflow**: Preflight duplicate detection prevents queueing conflicting installs for already active/queued jobs, while dedicated retry actions preserve original task IDs, prior error codes/messages, retry counters, and timestamps.
+  - **Searchable Install History & Diagnostics**: Full job diagnostic history recording submission/completion timestamps, package identifiers, failure reasons, retry provenance, and step-by-step remediation guidance; accessible via the UI Shell history dialog.
 - [ ] **Milestone 5: PS5 Payload Packaging & Hardware Integration**
 
 ---

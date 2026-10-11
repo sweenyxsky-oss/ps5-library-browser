@@ -79,3 +79,7 @@ add_test(NAME inspector_installer_test COMMAND inspector_installer_test)
 add_executable(ps5_installer_persistence_test tests/ps5_installer_persistence_test.cpp)
 target_link_libraries(ps5_installer_persistence_test PRIVATE ps5_library_core Threads::Threads)
 add_test(NAME ps5_installer_persistence_test COMMAND ps5_installer_persistence_test)
+# Install retry, preflight checks, and searchable diagnostics history tests
+add_executable(install_retry_preflight_history_test tests/install_retry_preflight_history_test.cpp)
+target_link_libraries(install_retry_preflight_history_test PRIVATE ps5_library_core Threads::Threads)
+add_test(NAME install_retry_preflight_history_test COMMAND install_retry_preflight_history_test)

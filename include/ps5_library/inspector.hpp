@@ -22,7 +22,7 @@ const char* to_string(InspectorTab tab);
 enum class InspectorFocusSection {
     Tabs,       // Focused on the 3 section buttons (Game, DLC, Update)
     ItemList,   // Focused on list of packages in current tab
-    Actions     // Focused on action buttons (Install, Install All DLCs, etc.)
+    Actions     // Focused on action buttons (Install, Retry, Install All DLCs, etc.)
 };
 
 /**
@@ -45,6 +45,8 @@ struct FormattedPackageDetail {
     std::string status_badge;      // "READY", "QUEUED", "INSTALLING (42%)", "INSTALLED", "FAILED", "INTERRUPTED"
     std::string error_message;
     std::string recovery_guidance; // Actionable steps to resolve failures or retry
+    bool can_retry{false};
+    bool has_active_task{false};
 
     /**
      * Formats one-line highlighted package summary:
@@ -98,10 +100,12 @@ public:
 
     // Action button states
     bool can_install_selected() const;
+    bool can_retry_selected() const;
     bool can_install_all_dlcs() const;
     size_t selected_action_button() const { return selected_action_button_; }
     void select_next_action();
     void select_prev_action();
+    std::vector<std::string> available_action_labels() const;
 
     // DualSense input handling
     // Returns true if input was consumed

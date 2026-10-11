@@ -41,6 +41,9 @@ enum class InstallErrorCode {
     CorruptedHeader,
     TargetAppRunning,
     InstallInterrupted,
+    FileUnreadable,
+    MetadataMissing,
+    DuplicateInstallBlocked,
     Unknown
 };
 
@@ -51,6 +54,29 @@ InstallErrorCode install_error_code_from_string(const std::string& str);
  * Returns user-actionable recovery guidance for a given install error.
  */
 std::string get_recovery_guidance(InstallErrorCode code, const std::string& extra_details = "");
+
+/**
+ * Result of package preflight validation step before dispatch.
+ */
+struct PreflightResult {
+    bool passed{true};
+    InstallErrorCode error_code{InstallErrorCode::None};
+    std::string error_message;
+    std::string recovery_guidance;
+    uint64_t file_size_bytes{0};
+    uint64_t available_storage_bytes{0};
+    uint64_t required_storage_bytes{0};
+    std::string detected_format;
+    std::string detected_title_id;
+};
+
+/**
+ * Runs preflight validation checking file readability, package metadata, magic headers,
+ * and available storage before dispatching to install delegates.
+ */
+PreflightResult run_package_preflight(const std::string& package_path,
+                                      const std::string& target_storage_dir = "/user/app",
+                                      uint64_t safety_margin_bytes = 500ULL * 1024ULL * 1024ULL);
 
 struct InstallTask {
     std::string task_id;
@@ -69,6 +95,16 @@ struct InstallTask {
     InstallErrorCode error_code{InstallErrorCode::None};
     std::string error_message;
     std::string recovery_guidance;
+
+    // Retry tracking & preserving original failure details
+    size_t retry_count{0};
+    std::string original_task_id;
+    InstallErrorCode original_error_code{InstallErrorCode::None};
+    std::string original_error_message;
+
+    // Timestamps
+    std::string created_timestamp;
+    std::string completed_timestamp;
 
     std::chrono::steady_clock::time_point start_time{};
     std::chrono::steady_clock::time_point finish_time{};
@@ -159,11 +195,6 @@ private:
 
 /**
  * PS5 Hardware / System-level package install delegate.
- * Connects to libSceAppInstUtil.sprx (sceAppInstUtilInstallByPackage / sceAppInstUtilInitialize)
- * or PS5 Direct Package Installer service on PS5 FreeBSD/Prospero environment.
- * Performs runtime environment capability checks, symbol resolution, and gives clear
- * unsupported-platform and privilege diagnostics on non-PS5 host OS or when required
- * modules / privileges are absent.
  */
 class Ps5InstallDelegate : public IInstallDelegate {
 public:
@@ -190,7 +221,6 @@ public:
     const SystemCapabilities& capabilities() const { return caps_; }
     void refresh_capabilities();
 
-    // Testing / simulation hook to mock PS5 environment behavior on host
     void set_mock_capabilities(bool is_ps5, bool has_priv, bool module_loaded, int err = 0, const std::string& reason = "");
 
 private:
@@ -236,7 +266,19 @@ using TaskFinishedCallback = std::function<void(const InstallTask& task)>;
 using BatchFinishedCallback = std::function<void(const BatchProgress& batch)>;
 
 /**
- * High-performance Install Pipeline with persistent job state and restart recovery.
+ * Result of checking whether a package can be queued or retried without duplication.
+ */
+struct QueueCheckResult {
+    bool can_queue{true};
+    bool is_duplicate{false};
+    bool is_retry{false};
+    std::string reason;
+    std::optional<InstallTask> existing_task;
+};
+
+/**
+ * High-performance Install Pipeline with persistent job state, preflight validation,
+ * retry actions preserving original errors, duplicate prevention, and searchable history.
  */
 class InstallPipeline {
 public:
@@ -248,8 +290,14 @@ public:
     InstallPipeline(const InstallPipeline&) = delete;
     InstallPipeline& operator=(const InstallPipeline&) = delete;
 
-    // Single item installation (Game, DLC, or Update)
+    // Single item installation with duplicate protection
     std::string queue_item(const GameItem& item, const std::string& title_id);
+
+    // Retry a failed or interrupted task, preserving original failure details and preflight checking
+    std::string retry_task(const std::string& task_id_or_path, std::string* out_error = nullptr);
+
+    // Preflight and duplicate check for a candidate item
+    QueueCheckResult check_queue_preflight(const std::string& source_path, bool is_retry_intent = false) const;
 
     // Batch "Install All DLCs" pipeline
     std::string install_all_dlcs(const GameEntry& entry);
@@ -276,6 +324,10 @@ public:
     InstallStatus get_item_status(const std::string& source_path) const;
     std::optional<InstallTask> get_task_by_path(const std::string& source_path) const;
 
+    // Searchable Install History
+    std::vector<InstallTask> search_history(const std::string& query = "",
+                                           std::optional<InstallStatus> status_filter = std::nullopt) const;
+
     // Callbacks
     void set_progress_callback(TaskProgressCallback cb);
     void set_task_finished_callback(TaskFinishedCallback cb);
@@ -292,6 +344,12 @@ public:
     void set_delegate(std::shared_ptr<IInstallDelegate> delegate);
     std::shared_ptr<IInstallDelegate> delegate() const { return delegate_; }
 
+    // Preflight configuration
+    void set_target_storage_dir(const std::string& dir) { target_storage_dir_ = dir; }
+    const std::string& target_storage_dir() const { return target_storage_dir_; }
+    void set_enable_preflight(bool enable) { enable_preflight_ = enable; }
+    bool is_preflight_enabled() const { return enable_preflight_; }
+
     // State persistence & recovery
     void set_persistence_path(const std::string& path);
     const std::string& persistence_path() const { return state_filepath_; }
@@ -301,6 +359,8 @@ public:
 private:
     std::shared_ptr<IInstallDelegate> delegate_;
     std::string state_filepath_;
+    std::string target_storage_dir_{"/user/app"};
+    bool enable_preflight_{false};
 
     mutable std::mutex queue_mutex_;
     std::vector<InstallTask> task_queue_;
@@ -317,7 +377,6 @@ private:
     BatchFinishedCallback batch_finished_callback_;
 
     void worker_loop();
-    bool execute_task_internal(InstallTask& task);
     std::string generate_task_id();
     uint64_t next_id_counter_{1};
 
