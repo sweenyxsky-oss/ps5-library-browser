@@ -1,0 +1,112 @@
+name: PS5 Build and Release
+
+on:
+  push:
+    paths-ignore:
+      - "**/*.md"
+  pull_request:
+    paths-ignore:
+      - "**/*.md"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-ps5-elf:
+    name: PS5 Cross-Compilation & Packaging
+    outputs:
+      archive_name: ${{ steps.package.outputs.archive_name }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout pacbrew-repo
+        uses: actions/checkout@v4
+        with:
+          repository: ps5-payload-dev/pacbrew-repo
+          path: pacbrew-repo
+
+      - name: Checkout SDK stubs
+        uses: actions/checkout@v4
+        with:
+          repository: ps5-payload-dev/sdk
+          path: ps5-sdk
+
+      - name: Setup Build Environment
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            autoconf \
+            automake \
+            build-essential \
+            clang-18 \
+            cmake \
+            curl \
+            git \
+            libarchive-tools \
+            libtool \
+            lld-18 \
+            makepkg \
+            meson \
+            pacman-package-manager \
+            pkg-config \
+            python3 \
+            python3-yaml \
+            xxd \
+            zip
+
+      - name: Build PS5 Payload SDK
+        working-directory: pacbrew-repo/sdk
+        run: |
+          makepkg -c -f
+          sudo pacman --noconfirm -U ./ps5-payload-*.pkg.tar.gz
+
+      - name: Configure CMake for PS5
+        run: |
+          cmake -B build-ps5 \
+            -DCMAKE_TOOLCHAIN_FILE=/opt/ps5-payload-sdk/toolchain/prospero.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPS5=ON
+
+      - name: Compile PS5 ELF Executable
+        run: |
+          cmake --build build-ps5 --target ps5_library_browser_elf
+
+      - name: Verify PS5 ELF Binary
+        run: |
+          ls -lh build-ps5/ps5-library-browser.elf
+          readelf -h build-ps5/ps5-library-browser.elf || true
+
+      - name: Package Release Archive
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_tag="$(git describe --abbrev=6 --dirty --always --tags 2>/dev/null || echo "${GITHUB_SHA::7}")"
+          archive_name="ps5-library-browser_${version_tag}.zip"
+
+          mkdir -p release_staging/sce_sys
+          cp build-ps5/ps5-library-browser.elf release_staging/
+          cp sce_sys/param.json release_staging/sce_sys/
+          cp README.md LICENSE release_staging/
+
+          cd release_staging
+          zip -r -9 "../${archive_name}" .
+          cd ..
+
+          echo "archive_name=${archive_name}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload PS5 Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.archive_name }}
+          path: ${{ steps.package.outputs.archive_name }}
+          if-no-files-found: error

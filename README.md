@@ -134,10 +134,33 @@ ctest --test-dir build --output-on-failure
   - **Immediate Preflight Re-Check & Changed Results Diffing**: Automatically verifies package readability, format/metadata signatures, and storage capacity immediately before dispatch, detecting and reporting deviations from initial summary snapshots.
   - **Export File Picker & Configurable Filenames**: Interactive modal for selecting destination directories and filenames for CSV/JSON diagnostic logs with real-time feedback and remediation on failure.
   - **Cross-Session Filter & Sort Persistence**: Atomically preserves install history filter options (outcome, format, date ranges, query) and sort preferences across application restarts.
-- [ ] **Milestone 5: PS5 Payload Packaging & Hardware Integration**
+- [x] **Milestone 5: PS5 Payload Packaging & Cross-Compilation Workflow**
+  - Dedicated CMake PS5 target (`ps5_library_browser_elf`) producing `ps5-library-browser.elf`
+  - Target entrypoint (`src/main.cpp`) with DualSense event loop, headless verification, `/hostapp` default scanning, and daemon health probe
+  - Homebrew metadata package manifest (`sce_sys/param.json`)
+  - Automated PS5 cross-compilation CI workflow with `pacbrew-repo` and `ps5-payload-sdk` toolchain packaging
 
 ---
 
 ## 📜 License
 
 This project is licensed under the **GNU General Public License v3.0**.
+
+### Building & Cross-Compiling for PS5
+
+#### Host Simulation & Testing (Linux / macOS)
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+ctest --test-dir build --output-on-failure
+./build/ps5-library-browser.elf --headless
+```
+
+#### PS5 Cross-Compilation (PS5 Payload SDK / Prospero)
+```bash
+cmake -B build-ps5 \
+  -DCMAKE_TOOLCHAIN_FILE=/opt/ps5-payload-sdk/toolchain/prospero.cmake \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DPS5=ON
+cmake --build build-ps5 --target ps5_library_browser_elf
+```

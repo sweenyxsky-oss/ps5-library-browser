@@ -42,44 +42,57 @@ target_link_libraries(ps5_library_core PUBLIC
     Threads::Threads
 )
 
+# Dedicated PS5 Application & Payload Target
+add_executable(ps5_library_browser_elf src/main.cpp)
+set_target_properties(ps5_library_browser_elf PROPERTIES 
+    OUTPUT_NAME "ps5-library-browser.elf"
+)
+target_link_libraries(ps5_library_browser_elf PRIVATE 
+    ps5_library_core 
+    Threads::Threads
+)
+
+# PS5 SDK stubs when cross-compiling via prospero.cmake / pacbrew
+if(PROSPERO OR PS5)
+    target_compile_definitions(ps5_library_browser_elf PRIVATE __PROSPERO__=1 __PS5__=1)
+    target_link_libraries(ps5_library_browser_elf PRIVATE
+        -lkernel
+        -lSceSystemService
+        -lSceNotification
+        -lSceAppInstUtil
+        -lSceNet
+        -lSceUserService
+    )
+endif()
+
 # Testing
 enable_testing()
 
 # Milestone 1 Tests
-add_executable(daemon_client_test
-    tests/daemon_client_test.cpp
-)
-target_link_libraries(daemon_client_test PRIVATE
-    ps5_library_core
-    Threads::Threads
-)
+add_executable(daemon_client_test tests/daemon_client_test.cpp)
+target_link_libraries(daemon_client_test PRIVATE ps5_library_core Threads::Threads)
 add_test(NAME daemon_client_test COMMAND daemon_client_test)
 
 # Milestone 2 Tests
-add_executable(scanner_cache_test
-    tests/scanner_cache_test.cpp
-)
-target_link_libraries(scanner_cache_test PRIVATE
-    ps5_library_core
-    Threads::Threads
-)
+add_executable(scanner_cache_test tests/scanner_cache_test.cpp)
+target_link_libraries(scanner_cache_test PRIVATE ps5_library_core Threads::Threads)
 add_test(NAME scanner_cache_test COMMAND scanner_cache_test)
 
-# Milestone 3 native UI state/layout/input tests
+# Milestone 3 Tests
 add_executable(ui_shell_test tests/ui_shell_test.cpp)
 target_link_libraries(ui_shell_test PRIVATE ps5_library_core Threads::Threads)
 add_test(NAME ui_shell_test COMMAND ui_shell_test)
 
-# Milestone 4 package inspector and install pipeline tests
+# Milestone 4 Tests
 add_executable(inspector_installer_test tests/inspector_installer_test.cpp)
 target_link_libraries(inspector_installer_test PRIVATE ps5_library_core Threads::Threads)
 add_test(NAME inspector_installer_test COMMAND inspector_installer_test)
 
-# Milestone 4 extension: PS5 install delegate, persistence, recovery and refresh tests
+# Milestone 4 Extensions Tests
 add_executable(ps5_installer_persistence_test tests/ps5_installer_persistence_test.cpp)
 target_link_libraries(ps5_installer_persistence_test PRIVATE ps5_library_core Threads::Threads)
 add_test(NAME ps5_installer_persistence_test COMMAND ps5_installer_persistence_test)
-# Install retry, preflight checks, and searchable diagnostics history tests
+
 add_executable(install_retry_preflight_history_test tests/install_retry_preflight_history_test.cpp)
 target_link_libraries(install_retry_preflight_history_test PRIVATE ps5_library_core Threads::Threads)
 add_test(NAME install_retry_preflight_history_test COMMAND install_retry_preflight_history_test)
