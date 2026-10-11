@@ -146,6 +146,70 @@ ctest --test-dir build --output-on-failure
 
 ---
 
+## 🚀 Installation & Setup on PS5
+
+### Prerequisites
+1. **PlayStation 5 Console**: Running compatible homebrew firmware (e.g. 3.xx–4.xx) with an active ELF loader or payload environment.
+2. **[ShadowMountPlus](https://github.com/sweenyxsky-oss/ShadowMountPlus)**: Installed and running in the background. PS5 Library Browser requires the ShadowMountPlus local daemon (`127.0.0.1:10101`) to unlock remote NFS browsing and virtual mounting features.
+3. **Network Connection**: PS5 connected to your local network with access to your NFS storage server (e.g., TrueNAS).
+
+---
+
+### Installation Methods
+
+#### Method 1: Payload Injection via Netcat / ELF Loader
+1. Download the latest release package (`ps5-library-browser_v*.zip`) from the [Releases](https://github.com/sweenyxsky-oss/ps5-library-browser/releases) page and extract it.
+2. Launch the ELF loader on your PS5 (listening on port `9020` or `9021`).
+3. Send `ps5-library-browser.elf` from your computer using `nc` (netcat) or any PS5 payload sender tool:
+   ```bash
+   # Linux / macOS
+   nc -w 3 <PS5_IP_ADDRESS> 9020 < ps5-library-browser.elf
+
+   # Windows (PowerShell with ncat or GUI payload sender)
+   ncat -w 3 <PS5_IP_ADDRESS> 9020 < ps5-library-browser.elf
+   ```
+
+#### Method 2: Homebrew Directory Installation (FTP / Itemzflow)
+1. Extract the release ZIP package containing `ps5-library-browser.elf` and the `sce_sys/` folder.
+2. Connect to your PS5 via FTP (e.g., FTPS5 or Itemzflow built-in FTP server).
+3. Transfer the extracted files to `/data/homebrew/ps5-library-browser/` or `/hostapp/`.
+4. Launch the application from your PS5 homebrew menu (e.g., [Itemzflow](https://github.com/sweenyxsky-oss/Itemzflow) or [ProsperoMgr](https://github.com/sweenyxsky-oss/ProsperoMgr)).
+
+---
+
+### Startup & Controls Guide
+
+On startup, the built-in **Diagnostics Engine** verifies the scan mount, network stack, cache files, and the ShadowMountPlus daemon. If ShadowMountPlus is offline, an on-screen recovery guidance dialog will appear explaining how to launch the daemon to unlock remote features.
+
+| Button | Action |
+| :--- | :--- |
+| **Square** | Switch Mode: **Installed Games** ⇄ **Library Browser** |
+| **Triangle** | Toggle View: **Coverflow Carousel** ⇄ **5-Column Block Grid** |
+| **D-Pad / Left Stick** | Navigate Game Cards & Packages |
+| **Cross** | Open Game / DLC / Update Inspector & Execute Install |
+| **Circle** | Back / Close Dialog / Dismiss Guidance |
+| **Options** | Open Filter & Sort History Modal |
+
+---
+
+## 🌟 Credits & Acknowledgments
+
+This project is **inspired by [Itemzflow](https://github.com/LightningMods/Itemzflow) & [PS5 Library](https://github.com/victor-s-santos/ps5-library)**. We gratefully acknowledge and credit the creators and maintainers of the following open-source repositories and tools:
+
+- **[Itemzflow](https://github.com/LightningMods/Itemzflow)** ([fork: sweenyxsky-oss/Itemzflow](https://github.com/sweenyxsky-oss/Itemzflow)) — by LightningMods & contributors. The iconic PS4/PS5 homebrew game manager and launcher that inspired this project's browsing, metadata organization, and package installation experience.
+- **[ps5-library](https://github.com/victor-s-santos/ps5-library)** ([fork: sweenyxsky-oss/ps5-library](https://github.com/sweenyxsky-oss/ps5-library)) — by victor-s-santos. The foundation for game library scanning concepts, title ID resolution, and TrueNAS/NFS game repository browsing.
+- **[ps5-homebrew-ui](https://github.com/victor-s-santos/ps5-homebrew-ui)** ([fork: sweenyxsky-oss/ps5-homebrew-ui](https://github.com/sweenyxsky-oss/ps5-homebrew-ui)) — by victor-s-santos. Modern native C++20 UI framework for PlayStation 5 homebrew, providing the architectural foundation for carousel, block-grid views, and controller navigation.
+- **[ShadowMountPlus](https://github.com/Shadow-M0unt/ShadowMountPlus)** ([fork: sweenyxsky-oss/ShadowMountPlus](https://github.com/sweenyxsky-oss/ShadowMountPlus)) — Virtual mounting subsystem and background daemon (`127.0.0.1:10101`) providing remote NFS/network storage mounting and `sce_sys/param.json` metadata parsing.
+- **[RemotePFS](https://github.com/flatz/RemotePFS)** ([fork: sweenyxsky-oss/RemotePFS](https://github.com/sweenyxsky-oss/RemotePFS)) — by flatz & contributors. Remote PFS mounting and network filesystem utilities for PlayStation 5.
+- **[ps5-ezremote-client](https://github.com/G991/ps5-ezremote-client)** ([fork: sweenyxsky-oss/ps5-ezremote-client](https://github.com/sweenyxsky-oss/ps5-ezremote-client)) — by G991. Remote client utilities and network mounting integrations.
+- **[libnfs](https://github.com/sahlberg/libnfs)** ([fork: sweenyxsky-oss/libnfs](https://github.com/sweenyxsky-oss/libnfs)) — by Ronnie Sahlberg. Robust userland client library for NFS network shares.
+- **[fuse-nfs](https://github.com/sahlberg/fuse-nfs)** ([fork: sweenyxsky-oss/fuse-nfs](https://github.com/sweenyxsky-oss/fuse-nfs)) — by Ronnie Sahlberg. FUSE filesystem module for mounting NFSv3/4 shares.
+- **[ProsperoMgr](https://github.com/idlesauce/ProsperoMgr)** ([fork: sweenyxsky-oss/ProsperoMgr](https://github.com/sweenyxsky-oss/ProsperoMgr)) — All-in-one manager for PlayStation 5 homebrew.
+- **[ps5-payload-sdk](https://github.com/ps5-payload-dev/sdk)** & **[pacbrew-repo](https://github.com/ps5-payload-dev/pacbrew-repo)** — Official PS5 homebrew SDK, toolchain wrappers (`prospero-clang++`), and runtime libraries for native ELF execution.
+- **[JSON for Modern C++](https://github.com/nlohmann/json)** — by Niels Lohmann. Header-only JSON library used for atomic caching, param parsing, diagnostics reporting, and job persistence.
+
+---
+
 ## 📜 License
 
 This project is licensed under the **GNU General Public License v3.0**.
