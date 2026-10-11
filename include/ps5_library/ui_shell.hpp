@@ -8,6 +8,7 @@
 #include "views.hpp"
 #include "installer.hpp"
 #include "inspector.hpp"
+#include "startup_diagnostics.hpp"
 
 #include <string>
 #include <vector>
@@ -27,7 +28,8 @@ enum class DialogType {
     InstallHistory,
     RetryConfirmation,
     PreflightSummary,
-    ExportFilePicker
+    ExportFilePicker,
+    StartupDiagnostics
 };
 
 struct DialogModel {
@@ -97,6 +99,10 @@ public:
     void show_preflight_summary(const GameItem& item, const std::string& title_id);
     void show_preflight_summary(const std::string& package_path, const std::string& title_id, const std::string& display_name = "");
     void dismiss_dialog();
+    // Startup diagnostics dialog
+    void show_startup_diagnostics(const StartupDiagnosticsReport& report);
+    const StartupDiagnosticsReport& startup_diagnostics_report() const { return startup_diagnostics_report_; }
+
 
     // Install History navigation, filtering, and sorting
     const std::vector<InstallTask>& history_items() const { return history_items_; }
@@ -177,6 +183,7 @@ private:
     size_t focused_index_{0};
 
     DialogModel dialog_model_;
+    StartupDiagnosticsReport startup_diagnostics_report_;
 
     // Install History dialog state
     std::string history_search_query_;

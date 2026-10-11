@@ -12,9 +12,11 @@
 #include "ps5_library/inspector.hpp"
 #include "ps5_library/installer.hpp"
 #include "ps5_library/scanner.hpp"
+#include "ps5_library/startup_diagnostics.hpp"
 #include "ps5_library/ui_shell.hpp"
 #include "ps5_library/views.hpp"
 
+#include <chrono>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -23,7 +25,6 @@
 #include <memory>
 #include <string>
 #include <thread>
-#include <chrono>
 
 #if defined(__PROSPERO__) || defined(__PS5__)
 #define PS5_PLATFORM 1
@@ -104,20 +105,39 @@ int main(int argc, char* argv[]) {
     std::cout << "[Init] Library Scan Root : " << root_scan_dir << "\n";
     std::cout << "[Init] Index Cache File  : " << cache_path << "\n";
     std::cout << "[Init] Job State File    : " << install_state_path << "\n";
-    std::cout << "[Init] ShadowMount Daemon: " << daemon_host << ":" << daemon_port << "\n";
+    std::cout << "[Init] ShadowMount Daemon: " << daemon_host << ":" << daemon_port << "\n\n";
 
-    // 1. Initialize ShadowMountPlus Daemon Probe & Feature Lock
+    // 1. Run Structured Startup Diagnostics (Mount, Daemon, Network, Services)
+    ps5_library::StartupDiagnosticsConfig diag_config;
+    diag_config.mount_path = root_scan_dir;
+    diag_config.daemon_host = daemon_host;
+    diag_config.daemon_port = daemon_port;
+    diag_config.cache_path = cache_path;
+    diag_config.jobs_path = install_state_path;
+
+    std::cout << "[Diagnostics] Running startup health checks...\n";
+    ps5_library::StartupDiagnosticsEngine diag_engine(diag_config);
+    auto diag_report = diag_engine.run_all_checks();
+    std::cout << diag_report.format_detailed_report() << "\n\n";
+
+    // 2. Initialize ShadowMountPlus Daemon Probe & Feature Lock
     auto daemon_client = std::make_shared<ps5_library::DaemonLock>(daemon_host, daemon_port);
     daemon_client->probe();
     const bool daemon_online = daemon_client->is_unlocked();
     std::cout << "[Probe] ShadowMountPlus Daemon Status: " 
               << (daemon_online ? "ONLINE (Features Unlocked)" : "OFFLINE (Remote Features Locked)") << "\n";
 
-    // 2. Initialize UI Shell, Index Cache & Install Pipeline
+    // 3. Initialize UI Shell, Index Cache & Install Pipeline
     ps5_library::UiShell shell(daemon_client, cache_path, install_state_path);
     shell.set_scan_path(root_scan_dir);
 
-    // 3. Perform initial scan of root path
+    // Present on-screen startup diagnostics dialog if warnings or failures were detected
+    if (diag_report.has_failures() || diag_report.has_warnings()) {
+        std::cout << "[Diagnostics] Active issues detected. Presenting on-screen recovery guidance dialog.\n";
+        shell.show_startup_diagnostics(diag_report);
+    }
+
+    // 4. Perform initial scan of root path
     std::cout << "[Scanner] Probing directory: " << root_scan_dir << "...\n";
     bool scan_finished = false;
     shell.trigger_scan(true, [&](bool success) {
@@ -138,7 +158,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    // 4. Interactive Application Loop
+    // 5. Interactive Application Loop
     std::cout << "[App] Entering interactive UI loop. Ready for DualSense input.\n";
     ps5_library::InputManager input_manager;
 

@@ -139,6 +139,10 @@ ctest --test-dir build --output-on-failure
   - Target entrypoint (`src/main.cpp`) with DualSense event loop, headless verification, `/hostapp` default scanning, and daemon health probe
   - Homebrew metadata package manifest (`sce_sys/param.json`)
   - Automated PS5 cross-compilation CI workflow with `pacbrew-repo` and `ps5-payload-sdk` toolchain packaging
+  - **Structured Startup Diagnostics**: Comprehensive boot-time health checks covering root scan mount availability, ShadowMountPlus daemon connectivity, network subsystem initialization, and persistence storage writeability.
+  - **On-Screen Recovery Guidance**: Active diagnostic issues automatically trigger an interactive UI dialog with step-by-step remediation procedures and live diagnostics re-run capabilities.
+  - **Automated Package & ELF Architecture CI Validation**: Dedicated release validator (`tools/validate_release_package.py`) enforcing archive integrity, required metadata (`sce_sys/param.json`), and 64-bit Little-Endian x86_64 ELF execution attributes.
+  - **Tag-Triggered GitHub Release Publishing**: Automated release pipeline generating versioned GitHub Releases with verified release archives when a `v*` tag is pushed.
 
 ---
 

@@ -30,6 +30,7 @@ add_library(ps5_library_core STATIC
     src/ui_shell.cpp
     src/installer.cpp
     src/inspector.cpp
+    src/startup_diagnostics.cpp
 )
 
 target_include_directories(ps5_library_core PUBLIC
@@ -96,3 +97,8 @@ add_test(NAME ps5_installer_persistence_test COMMAND ps5_installer_persistence_t
 add_executable(install_retry_preflight_history_test tests/install_retry_preflight_history_test.cpp)
 target_link_libraries(install_retry_preflight_history_test PRIVATE ps5_library_core Threads::Threads)
 add_test(NAME install_retry_preflight_history_test COMMAND install_retry_preflight_history_test)
+
+# Startup Diagnostics Tests
+add_executable(startup_diagnostics_test tests/startup_diagnostics_test.cpp)
+target_link_libraries(startup_diagnostics_test PRIVATE ps5_library_core Threads::Threads)
+add_test(NAME startup_diagnostics_test COMMAND startup_diagnostics_test)

@@ -592,6 +592,17 @@ bool UiShell::execute_export() {
     return success;
 }
 
+void UiShell::show_startup_diagnostics(const StartupDiagnosticsReport& report) {
+    startup_diagnostics_report_ = report;
+    dialog_model_.type = DialogType::StartupDiagnostics;
+    dialog_model_.title = "Startup Diagnostics & Recovery";
+    dialog_model_.message = report.format_summary();
+    dialog_model_.secondary_text = report.format_on_screen_guidance();
+    dialog_model_.options = {"Dismiss / Continue", "View Detailed Report", "Rerun Diagnostics"};
+    dialog_model_.selected_option = 0;
+    dialog_model_.extra_payload = report.format_detailed_report();
+}
+
 void UiShell::dismiss_dialog() {
     dialog_model_.type = DialogType::None;
     dialog_model_.title.clear();
@@ -944,6 +955,60 @@ bool UiShell::handle_pad_input(const InputManager& input) {
                 dismiss_dialog();
                 return true;
             }
+        } else if (dialog_model_.type == DialogType::StartupDiagnostics) {
+            if (input.action_triggered(LogicalAction::Cancel)) {
+                dismiss_dialog();
+                return true;
+            }
+            if (input.action_triggered(LogicalAction::NavUp)) {
+                if (!dialog_model_.options.empty()) {
+                    if (dialog_model_.selected_option > 0) {
+                        dialog_model_.selected_option--;
+                    } else {
+                        dialog_model_.selected_option = static_cast<int>(dialog_model_.options.size() - 1);
+                    }
+                }
+                return true;
+            }
+            if (input.action_triggered(LogicalAction::NavDown)) {
+                if (!dialog_model_.options.empty()) {
+                    dialog_model_.selected_option = (dialog_model_.selected_option + 1) % dialog_model_.options.size();
+                }
+                return true;
+            }
+            if (input.action_triggered(LogicalAction::ToggleMode) || input.action_triggered(LogicalAction::Inspect)) {
+                if (dialog_model_.message == startup_diagnostics_report_.format_summary()) {
+                    dialog_model_.message = startup_diagnostics_report_.format_detailed_report();
+                } else {
+                    dialog_model_.message = startup_diagnostics_report_.format_summary();
+                }
+                return true;
+            }
+            if (input.action_triggered(LogicalAction::Confirm)) {
+                if (dialog_model_.selected_option == 0) {
+                    dismiss_dialog();
+                    return true;
+                } else if (dialog_model_.selected_option == 1) {
+                    if (dialog_model_.message == startup_diagnostics_report_.format_summary()) {
+                        dialog_model_.message = startup_diagnostics_report_.format_detailed_report();
+                    } else {
+                        dialog_model_.message = startup_diagnostics_report_.format_summary();
+                    }
+                    return true;
+                } else if (dialog_model_.selected_option == 2) {
+                    StartupDiagnosticsConfig cfg;
+                    cfg.mount_path = current_scan_path_;
+                    if (daemon_client_) {
+                        auto tgt = daemon_client_->target();
+                        cfg.daemon_host = tgt.first;
+                        cfg.daemon_port = tgt.second;
+                    }
+                    StartupDiagnosticsEngine engine(cfg);
+                    show_startup_diagnostics(engine.run_all_checks());
+                    return true;
+                }
+                return true;
+            }
         } else if (dialog_model_.type == DialogType::ExportFilePicker) {
             if (input.action_triggered(LogicalAction::Cancel)) {
                 show_install_history();
@@ -1214,6 +1279,13 @@ std::vector<ButtonPrompt> UiShell::get_contextual_prompts() const {
             prompts.push_back({ButtonGlyph::Cross, "Dismiss", true, true});
             prompts.push_back({ButtonGlyph::Circle, "Close", true, false});
         }
+        return prompts;
+    }
+
+    if (dialog_model_.type == DialogType::StartupDiagnostics) {
+        prompts.push_back({ButtonGlyph::Cross, "Select Option", true, true});
+        prompts.push_back({ButtonGlyph::Circle, "Dismiss", true, false});
+        prompts.push_back({ButtonGlyph::Triangle, "Details", true, false});
         return prompts;
     }
 

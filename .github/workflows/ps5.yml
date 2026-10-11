@@ -2,6 +2,10 @@ name: PS5 Build and Release
 
 on:
   push:
+    branches:
+      - main
+    tags:
+      - 'v*'
     paths-ignore:
       - "**/*.md"
   pull_request:
@@ -28,18 +32,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Checkout pacbrew-repo
-        uses: actions/checkout@v4
-        with:
-          repository: ps5-payload-dev/pacbrew-repo
-          path: pacbrew-repo
-
-      - name: Checkout SDK stubs
-        uses: actions/checkout@v4
-        with:
-          repository: ps5-payload-dev/sdk
-          path: ps5-sdk
-
       - name: Setup Build Environment
         run: |
           sudo apt update
@@ -54,20 +46,17 @@ jobs:
             libarchive-tools \
             libtool \
             lld-18 \
-            makepkg \
-            meson \
-            pacman-package-manager \
+            llvm-18 \
             pkg-config \
             python3 \
-            python3-yaml \
-            xxd \
             zip
 
-      - name: Build PS5 Payload SDK
-        working-directory: pacbrew-repo/sdk
+      - name: Install PS5 Payload SDK
         run: |
-          makepkg -c -f
-          sudo pacman --noconfirm -U ./ps5-payload-*.pkg.tar.gz
+          # Install official prebuilt PS5 Payload SDK with C++ runtimes (libc++, libc++abi, libunwind, stubs)
+          curl -sSL "https://github.com/ps5-payload-dev/pacbrew-repo/releases/download/v0.41.1/ps5-payload-dev.tar.gz" | sudo tar -zx -C /
+          ls -lh /opt/ps5-payload-sdk/toolchain/prospero.cmake
+          ls -lh /opt/ps5-payload-sdk/target/lib/libc++.a
 
       - name: Configure CMake for PS5
         run: |
@@ -78,7 +67,7 @@ jobs:
 
       - name: Compile PS5 ELF Executable
         run: |
-          cmake --build build-ps5 --target ps5_library_browser_elf
+          cmake --build build-ps5 --target ps5_library_browser_elf --verbose
 
       - name: Verify PS5 ELF Binary
         run: |
@@ -104,9 +93,34 @@ jobs:
 
           echo "archive_name=${archive_name}" >> "$GITHUB_OUTPUT"
 
+      - name: Validate Release Package & ELF Architecture
+        run: |
+          python3 tools/validate_release_package.py "${{ steps.package.outputs.archive_name }}"
+
       - name: Upload PS5 Build Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.package.outputs.archive_name }}
           path: ${{ steps.package.outputs.archive_name }}
           if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build-ps5-elf
+    permissions:
+      contents: write
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Build Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-ps5-elf.outputs.archive_name }}
+          path: dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: dist/${{ needs.build-ps5-elf.outputs.archive_name }}
