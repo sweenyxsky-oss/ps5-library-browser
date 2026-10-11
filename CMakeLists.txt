@@ -25,6 +25,9 @@ add_library(ps5_library_core STATIC
     src/game_metadata.cpp
     src/scanner.cpp
     src/index_cache.cpp
+    src/input.cpp
+    src/views.cpp
+    src/ui_shell.cpp
 )
 
 target_include_directories(ps5_library_core PUBLIC
@@ -59,3 +62,8 @@ target_link_libraries(scanner_cache_test PRIVATE
     Threads::Threads
 )
 add_test(NAME scanner_cache_test COMMAND scanner_cache_test)
+
+# Milestone 3 native UI state/layout/input tests
+add_executable(ui_shell_test tests/ui_shell_test.cpp)
+target_link_libraries(ui_shell_test PRIVATE ps5_library_core Threads::Threads)
+add_test(NAME ui_shell_test COMMAND ui_shell_test)

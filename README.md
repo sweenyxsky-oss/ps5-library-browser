@@ -14,37 +14,25 @@ Designed specifically for remote network storage (NFS) and local drives, featuri
 ## 🚀 Key Features
 
 ### 1. Dual Mode Library View
-- **Installed Games**: Fast view of games already installed on internal/extended storage.
-- **Library Browser**: Remote NFS / local network repository browser.
-- One-button instant toggle between Installed and Remote library modes.
+- **Installed Games**: Fast view of games installed on internal/extended storage.
+- **Library Browser**: Remote NFS / hostapp repository browser.
+- Instant toggle between Installed and Remote modes with DualSense Triangle (`△`).
+- Gated behind ShadowMountPlus health verification for remote browsing.
 
 ### 2. Dual Presentation Layouts
-- **Scrolling Covers (Coverflow Carousel)**: Horizontal fluid carousel with game reflections and centered focus.
-- **Blocks (Grid View)**: High-density cover grid for fast browsing across large game catalogs.
-- Responsive DualSense D-Pad and analog stick navigation.
+- **Scrolling Covers (Coverflow Carousel)**: Horizontal carousel with focused card enlargement, depth layering, and perspective falloff.
+- **Blocks (Grid View)**: 5-column 2D grid layout with multi-axis DualSense navigation and viewport scroll tracking.
+- Toggle layout instantly with Touchpad or Options button.
 
-### 3. Deep Game Inspector & Package Breakdown
-- High-resolution game cover and title banner.
-- Title ID detection (`PPSAxxxxx` for PS5, `CUSAxxxxx` for PS4) and total calculated storage footprint.
-- Highlighted format indicator (`.pkg`, `.exfat`, `.ffpkg`, etc.).
-- Categorized action tabs:
-  - **Game**: Base game package info, size, file name, and install action.
-  - **DLC**: Individual DLC package list with per-item install buttons and a bulk **"Install All"** button.
-  - **Update**: Title updates with patch version, release metadata, and update install button.
+### 3. DualSense Controller Navigation & On-Screen Prompts
+- Native mapping for DualSense D-Pad and analog stick navigation with deadzone and auto-repeat support.
+- Dynamic contextual button prompt bar (`△ Toggle Mode`, `Touchpad View`, `L1/R1 Filter`, `□ Inspect`, `✕ Select`, `○ Back`).
+- Modal dialogs for connection recovery and lock explanations.
 
 ### 4. High-Speed Scanner & Persistent Cached Indexing
-- **Default Path**: Pre-configured to `/hostapp`.
-- **PS5 Local Folder Browser**: Built-in path picker to navigate and select directories on console storage.
-- **NFS Network Mount**: Direct connection by providing IP address, remote export path, username, and password credentials.
-- **Atomic Cache Engine**: Atomic serialization with unique process/timestamp temporary files, disk flush guarantees (`fsync`), and atomic replacement so large remote shares load instantaneously on startup without rescanning.
-- **Param Metadata Classifier**: Decodes `sce_sys/param.json` categories (`gd` for base games, `gp` for patches/updates, `ac` for DLC/add-on content) with multi-language title fallbacks (`en-US`, `defaultLanguage`) and automatic sibling `icon0.png` detection.
-
-### 5. ShadowMountPlus Companion Lock
-- Probes local daemon instance at `127.0.0.1:10101` (`/api/v1/version`).
-- Features that depend on mounting, network installation, or daemon services are safely gated when ShadowMountPlus is not running.
-- Displays the clear requirement prompt:
-  > **"ShadowMount Plus is required to unlock these features"**
-- Dynamically unlocks the moment a working ShadowMountPlus instance is detected in the background.
+- Scans `/hostapp`, local folders, and network mounts.
+- Decodes `sce_sys/param.json` categories (`gd` base game, `gp` patch, `ac` DLC) and title ID tags (`PPSA` / `CUSA`).
+- Atomic JSON cache engine ensures zero-latency library startup.
 
 ---
 
@@ -52,28 +40,28 @@ Designed specifically for remote network storage (NFS) and local drives, featuri
 
 ```
 ps5-library-browser/
-├── .github/
-│   └── workflows/
-│       └── ci.yml               # Automated host build & unit test CI workflow
-├── CMakeLists.txt               # Cross-platform CMake build configuration
-├── include/
-│   └── ps5_library/
-│       ├── daemon_client.hpp    # ShadowMountPlus daemon probe, health check & feature lock
-│       ├── game_metadata.hpp    # Param.json parser, ItemKind (Game/DLC/Update), sizes & models
-│       ├── scanner.hpp          # Recursive multi-source scanner with depth control & async workers
-│       └── index_cache.hpp      # Atomic persistent JSON cache, search, and filtering engine
+├── .github/workflows/ci.yml      # Automated host build & unit test CI workflow
+├── CMakeLists.txt                # Cross-platform CMake configuration
+├── include/ps5_library/
+│   ├── daemon_client.hpp         # ShadowMountPlus daemon probe & feature gate
+│   ├── game_metadata.hpp         # Metadata parser, categories, and models
+│   ├── scanner.hpp               # Recursive multi-source scanner
+│   ├── index_cache.hpp           # Atomic persistent cache & query filters
+│   ├── input.hpp                 # DualSense pad mapping & prompt model
+│   ├── views.hpp                 # Coverflow & Block Grid layout calculations
+│   └── ui_shell.hpp              # Native UI shell, state machine & dialogs
 ├── src/
-│   ├── daemon_client.cpp        # POSIX non-blocking socket client & lock engine
-│   ├── game_metadata.cpp        # Title ID regex, category mapping, localized title resolution
-│   ├── scanner.cpp              # Filesystem crawl, directory size calculation & item grouping
-│   └── index_cache.cpp          # Atomic temp file write, fsync & JSON schema serialization
+│   ├── daemon_client.cpp         # Socket client & lock manager
+│   ├── game_metadata.cpp         # Param parser & Title ID heuristics
+│   ├── scanner.cpp               # Directory scanner & grouping
+│   ├── index_cache.cpp           # Atomic cache implementation
+│   ├── input.cpp                 # Input processing & repeat timer
+│   ├── views.cpp                 # Coverflow & Grid card positioning
+│   └── ui_shell.cpp              # UI shell flow & input routing
 ├── tests/
-│   ├── daemon_client_test.cpp   # Milestone 1 unit tests with mock HTTP server
-│   └── scanner_cache_test.cpp   # Milestone 2 unit tests for scanner, heuristics & atomic cache
-├── external/
-│   └── nlohmann/
-│       └── json.hpp             # Modern JSON parser for API payloads and cache
-├── LICENSE                      # GNU General Public License v3.0
+│   ├── daemon_client_test.cpp    # Milestone 1 tests
+│   ├── scanner_cache_test.cpp    # Milestone 2 tests
+│   └── ui_shell_test.cpp         # Milestone 3 tests
 └── README.md
 ```
 
@@ -82,68 +70,18 @@ ps5-library-browser/
 ## 🛣️ Development Roadmap
 
 - [x] **Milestone 1: Daemon Health Probe & Feature Lock Engine**
-  - Cross-platform non-blocking socket client for `127.0.0.1:10101`
-  - Version & capability negotiation with ShadowMountPlus (`/api/v1/version`)
-  - Feature gating engine with mandatory lock banner (`"ShadowMount Plus is required to unlock these features"`)
-  - Background asynchronous monitor thread with state change callbacks
-  - Host unit tests with simulated mock HTTP daemon and 100% test pass
-  - Automated GitHub Actions CI workflow
-
 - [x] **Milestone 2: High-Speed Game Scanner, Metadata Classifier & Atomic Index Cache**
-  - High-performance recursive filesystem scanner supporting `/hostapp`, local folders, and network mounts
-  - Classification engine: `sce_sys/param.json` parser distinguishing `gd` (Game), `gp` (Patch/Update), and `ac` (Add-on/DLC)
-  - Title ID extraction (`PPSA` / `CUSA` / `LAPY` / `FAKE`) and cover art (`icon0.png`) locator
-  - Multi-language title fallback (`en-US`, `defaultLanguage`, and root definitions)
-  - Item grouping: automatically associates base game, DLC packages, and updates under a single Title ID entry
-  - Atomic persistent JSON library cache (unique PID/timestamp temp files, `fsync`, atomic rename)
-  - Fast search, Title ID lookup, and format filters (`.pkg`, `.exfat`, `.ffpkg`, folder)
-  - Comprehensive unit test suite with mock filesystem and 100% test pass
-
-- [ ] **Milestone 3: Native Dual-Mode UI Engine**
-  - Installed Games vs Library Browser toggle
-  - Coverflow Carousel vs Block Grid view modes
-  - DualSense controller input handling and smooth scrolling navigation
-
+- [x] **Milestone 3: Native Dual-Mode UI Engine & DualSense Navigation**
+  - Mode toggle: Installed Games vs Library Browser
+  - Gated remote browser requiring ShadowMountPlus daemon
+  - Selectable views: Coverflow carousel and 5-column Block Grid
+  - Format filters (PKG, exFAT, FFPKG, Folder) and live search
+  - Contextual DualSense button prompt bar and input repeat handling
 - [ ] **Milestone 4: Game Inspector & Multi-Installer**
-  - Game, DLC, and Update detail breakdown with formatted file attributes
-  - Single-DLC install and "Install All" batch installation pipeline
-  - Storage path configuration (Local directory picker & NFS credentials)
-
 - [ ] **Milestone 5: PS5 Payload Packaging & Hardware CI**
-  - Integration with PS5 Payload SDK toolchain
-  - Native ELF artifact build and deployment testing
-
----
-
-## 🛠️ Building & Testing
-
-### Host Linux Build & Verification
-```bash
-# Clone the repository
-git clone https://github.com/sweenyxsky-oss/ps5-library-browser.git
-cd ps5-library-browser
-
-# Configure with CMake & Ninja
-cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-
-# Build core library and test suites
-cmake --build build
-
-# Run unit tests
-ctest --test-dir build --output-on-failure
-```
-
----
-
-## 🤝 Credits & Acknowledgments
-
-- **[Itemzflow](https://github.com/LightningMods/Itemzflow)** by [LightningMods](https://twitter.com/LightningMods_) & contributors for frontend inspiration and pioneering open-source PS4/PS5 homebrew menus.
-- **[ShadowMountPlus](https://github.com/sweenyxsky-oss/ShadowMountPlus)** for the daemon API, mounting utilities, and background services.
-- **[ps5-payload-sdk](https://github.com/ps5-payload-dev/pacbrew-repo)** & OpenOrbis for the PS5 toolchain and homebrew headers.
-- **[nlohmann/json](https://github.com/nlohmann/json)** for C++ JSON serialization.
 
 ---
 
 ## 📜 License
 
-This project is licensed under the **GNU General Public License v3.0** - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the **GNU General Public License v3.0**.
