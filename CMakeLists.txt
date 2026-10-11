@@ -22,6 +22,9 @@ include_directories(
 # Core library
 add_library(ps5_library_core STATIC
     src/daemon_client.cpp
+    src/game_metadata.cpp
+    src/scanner.cpp
+    src/index_cache.cpp
 )
 
 target_include_directories(ps5_library_core PUBLIC
@@ -37,13 +40,22 @@ target_link_libraries(ps5_library_core PUBLIC
 # Testing
 enable_testing()
 
+# Milestone 1 Tests
 add_executable(daemon_client_test
     tests/daemon_client_test.cpp
 )
-
 target_link_libraries(daemon_client_test PRIVATE
     ps5_library_core
     Threads::Threads
 )
-
 add_test(NAME daemon_client_test COMMAND daemon_client_test)
+
+# Milestone 2 Tests
+add_executable(scanner_cache_test
+    tests/scanner_cache_test.cpp
+)
+target_link_libraries(scanner_cache_test PRIVATE
+    ps5_library_core
+    Threads::Threads
+)
+add_test(NAME scanner_cache_test COMMAND scanner_cache_test)

@@ -32,11 +32,12 @@ Designed specifically for remote network storage (NFS) and local drives, featuri
   - **DLC**: Individual DLC package list with per-item install buttons and a bulk **"Install All"** button.
   - **Update**: Title updates with patch version, release metadata, and update install button.
 
-### 4. Storage & Path Engine
+### 4. High-Speed Scanner & Persistent Cached Indexing
 - **Default Path**: Pre-configured to `/hostapp`.
 - **PS5 Local Folder Browser**: Built-in path picker to navigate and select directories on console storage.
 - **NFS Network Mount**: Direct connection by providing IP address, remote export path, username, and password credentials.
-- **Persistent Cached Indexing**: Generates an atomic, high-performance local index cache so large remote shares load instantaneously on startup without rescanning.
+- **Atomic Cache Engine**: Atomic serialization with unique process/timestamp temporary files, disk flush guarantees (`fsync`), and atomic replacement so large remote shares load instantaneously on startup without rescanning.
+- **Param Metadata Classifier**: Decodes `sce_sys/param.json` categories (`gd` for base games, `gp` for patches/updates, `ac` for DLC/add-on content) with multi-language title fallbacks (`en-US`, `defaultLanguage`) and automatic sibling `icon0.png` detection.
 
 ### 5. ShadowMountPlus Companion Lock
 - Probes local daemon instance at `127.0.0.1:10101` (`/api/v1/version`).
@@ -57,11 +58,18 @@ ps5-library-browser/
 ├── CMakeLists.txt               # Cross-platform CMake build configuration
 ├── include/
 │   └── ps5_library/
-│       └── daemon_client.hpp    # ShadowMountPlus daemon probe, health check & feature lock
+│       ├── daemon_client.hpp    # ShadowMountPlus daemon probe, health check & feature lock
+│       ├── game_metadata.hpp    # Param.json parser, ItemKind (Game/DLC/Update), sizes & models
+│       ├── scanner.hpp          # Recursive multi-source scanner with depth control & async workers
+│       └── index_cache.hpp      # Atomic persistent JSON cache, search, and filtering engine
 ├── src/
-│   └── daemon_client.cpp        # POSIX non-blocking socket client & lock engine
+│   ├── daemon_client.cpp        # POSIX non-blocking socket client & lock engine
+│   ├── game_metadata.cpp        # Title ID regex, category mapping, localized title resolution
+│   ├── scanner.cpp              # Filesystem crawl, directory size calculation & item grouping
+│   └── index_cache.cpp          # Atomic temp file write, fsync & JSON schema serialization
 ├── tests/
-│   └── daemon_client_test.cpp   # Comprehensive Milestone 1 unit tests with mock HTTP server
+│   ├── daemon_client_test.cpp   # Milestone 1 unit tests with mock HTTP server
+│   └── scanner_cache_test.cpp   # Milestone 2 unit tests for scanner, heuristics & atomic cache
 ├── external/
 │   └── nlohmann/
 │       └── json.hpp             # Modern JSON parser for API payloads and cache
@@ -81,11 +89,15 @@ ps5-library-browser/
   - Host unit tests with simulated mock HTTP daemon and 100% test pass
   - Automated GitHub Actions CI workflow
 
-- [ ] **Milestone 2: Multi-Source Scanner & Metadata Cache**
-  - Portable C++ filesystem scanner supporting `/hostapp`, local folders, and NFS mounts
+- [x] **Milestone 2: High-Speed Game Scanner, Metadata Classifier & Atomic Index Cache**
+  - High-performance recursive filesystem scanner supporting `/hostapp`, local folders, and network mounts
   - Classification engine: `sce_sys/param.json` parser distinguishing `gd` (Game), `gp` (Patch/Update), and `ac` (Add-on/DLC)
-  - Title ID extraction (`PPSA` / `CUSA`) and cover art (`icon0.png` / `pic0.png`) locator
-  - Atomic persistent JSON library cache for zero-delay startup
+  - Title ID extraction (`PPSA` / `CUSA` / `LAPY` / `FAKE`) and cover art (`icon0.png`) locator
+  - Multi-language title fallback (`en-US`, `defaultLanguage`, and root definitions)
+  - Item grouping: automatically associates base game, DLC packages, and updates under a single Title ID entry
+  - Atomic persistent JSON library cache (unique PID/timestamp temp files, `fsync`, atomic rename)
+  - Fast search, Title ID lookup, and format filters (`.pkg`, `.exfat`, `.ffpkg`, folder)
+  - Comprehensive unit test suite with mock filesystem and 100% test pass
 
 - [ ] **Milestone 3: Native Dual-Mode UI Engine**
   - Installed Games vs Library Browser toggle
